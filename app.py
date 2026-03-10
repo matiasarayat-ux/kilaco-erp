@@ -1437,35 +1437,50 @@ init_session()
 
 def login_view():
     """Vista de inicio de sesión conectada a Supabase Auth."""
-    c1, c2, c3 = st.columns([1, 1, 1])
+    
+    st.write("")
+    st.write("")
+    
+    # Proporción calibrada para la tarjeta central en PC
+    c1, c2, c3 = st.columns([1, 1.2, 1])
+    
     with c2:
-        lc1, lc2, lc3 = st.columns([1.5, 1, 1.5])
-        with lc2:
-            try: st.image("logo.png", use_container_width=True) 
-            except: st.markdown("<h1 style='text-align: center;'>🥖</h1>", unsafe_allow_html=True)
+        # EL TRUCO DEFINITIVO: HTML puro con Base64 para forzar el centrado absoluto
+        try:
+            import base64
+            with open("logo.png", "rb") as image_file:
+                encoded_string = base64.b64encode(image_file.read()).decode()
+            
+            # Se inyecta como HTML inmutable
+            st.markdown(f"""
+                <div style="display: flex; justify-content: center; margin-bottom: 10px;">
+                    <img src="data:image/png;base64,{encoded_string}" width="140" style="max-width: 100%;">
+                </div>
+            """, unsafe_allow_html=True)
+        except Exception as e:
+            # Fallback en caso de que logo.png no se encuentre
+            st.markdown("<h1 style='text-align: center; font-size: 5rem; margin:0;'>🥖</h1>", unsafe_allow_html=True)
         
         st.markdown("<h3 style='text-align: center; margin-top: 0px;'>Inicio de Sesión</h3>", unsafe_allow_html=True)
         
         with st.form("login_form"):
-            # IMPORTANTE: Supabase usa Email para autenticar
             email = st.text_input("Correo Electrónico") 
             pw = st.text_input("Contraseña", type="password")
             mantener = st.checkbox("Mantener sesión iniciada")
             
-            if st.form_submit_button("Entrar", type="primary"):
+            st.write("")
+            if st.form_submit_button("Entrar", type="primary", use_container_width=True):
                 if not email or not pw:
                     st.warning("Por favor ingresa correo y contraseña.")
                 else:
-                    # Llamamos a la nueva lógica de Supabase
                     user_data = check_login(email, pw) 
                     
                     if user_data:
-                        # Guardamos TODOS los datos críticos en la sesión
                         st.session_state.logged_in = True
                         st.session_state.user_id = user_data["id"]
                         st.session_state.user_name = user_data["nombre"]
                         st.session_state.user_role = user_data["rol"]
-                        st.session_state.id_vendedor = user_data["id_vendedor"] # Vital para repartidores
+                        st.session_state.id_vendedor = user_data["id_vendedor"]
                         
                         if mantener: 
                             st.query_params["session"] = "active"
@@ -4266,3 +4281,4 @@ else:
     if st.session_state.current_module == "menu": menu_view()
     elif st.session_state.current_module == "especial": app_pan_especial()
     elif st.session_state.current_module == "corriente": app_pan_corriente()
+
