@@ -33,23 +33,51 @@ except Exception as e:
 
 
 def aplicar_estilos_kilaco():
-    """Inyecta CSS para tipografía, pestañas y optimización de espacios (MILL)."""
+    """Inyecta CSS para tipografía, pestañas y optimización ergonómica táctil (MILL)."""
     st.markdown("""
         <style>
         @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600&display=swap');
         .stApp {font-family: 'Inter', sans-serif;}
         
-        /* 1. OPTIMIZACIÓN DE ESPACIO: Reducir el enorme margen superior por defecto */
+        /* 1. OPTIMIZACIÓN DE ESPACIO BASE (Escritorio) */
         .block-container {
             padding-top: 2rem !important;
             padding-bottom: 2rem !important;
         }
         
-        /* 2. Limpiar y jerarquizar el texto de las pestañas */
+        /* 2. JERARQUÍA EN PESTAÑAS */
         button[data-baseweb="tab"] > div[data-testid="stMarkdownContainer"] > p {
             font-size: 1.05rem !important;
             font-weight: 600 !important;
             color: #333333 !important;
+        }
+
+        /* 3. ERGONOMÍA TÁCTIL (Media Queries para Móviles y Tablets) */
+        @media (max-width: 768px) {
+            /* Reducir márgenes laterales muertos para ganar espacio útil en la grilla */
+            .block-container {
+                padding-left: 0.5rem !important;
+                padding-right: 0.5rem !important;
+                padding-top: 1rem !important;
+            }
+            
+            /* Áreas de impacto (Tap Targets) ampliadas para los dedos */
+            .stButton > button {
+                min-height: 3.2rem !important;
+                font-size: 1.1rem !important;
+                border-radius: 8px !important;
+            }
+            
+            /* Bloqueo del Zoom de iOS: Exige que los inputs sean de 16px mínimo */
+            input, select, textarea, div[data-baseweb="select"] > div {
+                font-size: 16px !important;
+                min-height: 3rem !important;
+            }
+            
+            /* Ajuste de jerarquía de textos para no saturar pantallas pequeñas */
+            h3 { font-size: 1.5rem !important; }
+            h4 { font-size: 1.3rem !important; }
+            h5 { font-size: 1.1rem !important; }
         }
         </style>
     """, unsafe_allow_html=True)
@@ -418,17 +446,31 @@ def actualizar_carga_masiva(df_editado):
 def obtener_planilla(fecha, id_v):
     conn = get_conn()
     try:
-        # Ya no usamos get_orden_cultural, traemos orden_visual de la DB
         df_prod = pd.read_sql("SELECT id, nombre, precio_estandar, orden_visual FROM productos", conn)
         df_hoy = pd.read_sql("SELECT id as id_despacho, id_producto, saldo_anterior, carga, devolucion_muestra, saldo_actual FROM despacho WHERE fecha=%s AND id_vendedor=%s", conn, params=(fecha, id_v))
         
-        # Leemos el descuento directamente de la tabla vendedores
         with conn.cursor() as c:
-            c.execute("SELECT dscto_esp FROM vendedores WHERE id=%s", (id_v,))
+            c.execute("SELECT dscto_esp, nombre FROM vendedores WHERE id=%s", (id_v,))
             res_desc = c.fetchone()
             descuento = float(res_desc[0]) if res_desc and res_desc[0] else 0.0
+            vendedor_nombre = res_desc[1] if res_desc else ""
             
-        if descuento > 0:
+        # --- MOTOR DE PRECIOS PERSONALIZADOS (HUGO PALACIOS) ---
+        if vendedor_nombre == "Hugo Palacios":
+            precios_hugo = {
+                "Lengua": 1150, "Lengua 6": 1000, "Frica": 1250, "Lengua XL (25)": 1350,
+                "Molde XL": 1400, "Molde": 1300, "Pizza Individual": 1050, "Frica XL": 1350,
+                "Hallulla": 1050, "Tapadito": 1400, "Pan Rallado": 550, "Pizza Familiar": 1300,
+                "Lengua XXL (30)": 1950, "Lengua XXXL (35)": 2350, "Lengua XXXXL (40)": 2650
+            }
+            def set_precio_hugo(row):
+                nombre_limpio = str(row['nombre']).strip()
+                return precios_hugo.get(nombre_limpio, row['precio_estandar'])
+
+            df_prod['precio_estandar'] = df_prod.apply(set_precio_hugo, axis=1)
+            
+        # Para el resto de los mortales, aplicamos el descuento normal
+        elif descuento > 0:
             df_prod['precio_estandar'] = df_prod['precio_estandar'] * (1 - descuento)
         
         filas = []
@@ -448,7 +490,7 @@ def obtener_planilla(fecha, id_v):
         
         if not filas: return pd.DataFrame()
         df = pd.DataFrame(filas)
-        df = df.sort_values('orden_visual') # Orden nativo SQL
+        df = df.sort_values('orden_visual') 
         df['disp'] = df['saldo_anterior'] + df['carga']
         df['venta'] = (df['disp'] - df['devolucion_muestra'] - df['saldo_actual']).clip(lower=0)
         df['total'] = df['venta'] * df['precio_estandar']
@@ -490,12 +532,24 @@ def save_finanzas(fecha, id_v, d):
         with conn.cursor() as c:
             c.execute("SELECT id FROM finanzas WHERE fecha=%s AND id_vendedor=%s", (fecha, id_v))
             ex = c.fetchone()
+            
+            # EL PURIFICADOR: Forzamos la conversión de numpy.int64 a int nativo de Python
+            cc = int(d['cc'])
+            co = int(d['co'])
+            ds = int(d['ds'])
+            bn = int(d['bn'])
+            su = int(d['su'])
+            om = int(d['om'])
+            ef = int(d['ef'])
+            tr = int(d['tr'])
+            pc = int(d['pc'])
+            
             if ex:
                 c.execute("UPDATE finanzas SET creditos_cobrados=%s, creditos_otorgados=%s, descuentos_total=%s, bencina=%s, sueldo=%s, otros_gastos_monto=%s, otros_gastos_detalle=%s, efectivo_rendido=%s, transferencia_rendida=%s, pago_centralizado=%s, creditos_cobrados_detalle=%s WHERE id=%s", 
-                          (d['cc'],d['co'],d['ds'],d['bn'],d['su'],d['om'],d['od'],d['ef'],d['tr'],d['pc'],d['cc_det'],ex[0]))
+                          (cc, co, ds, bn, su, om, d['od'], ef, tr, pc, d['cc_det'], ex[0]))
             else:
                 c.execute("INSERT INTO finanzas (fecha, id_vendedor, creditos_cobrados, creditos_otorgados, descuentos_total, bencina, sueldo, otros_gastos_monto, otros_gastos_detalle, efectivo_rendido, transferencia_rendida, pago_centralizado, creditos_cobrados_detalle) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)", 
-                          (fecha, id_v, d['cc'],d['co'],d['ds'],d['bn'],d['su'],d['om'],d['od'],d['ef'],d['tr'],d['pc'],d['cc_det']))
+                          (fecha, id_v, cc, co, ds, bn, su, om, d['od'], ef, tr, pc, d['cc_det']))
         conn.commit()
     finally:
         conn.close()
@@ -503,18 +557,49 @@ def save_finanzas(fecha, id_v, d):
 def obtener_resumen_global(fecha_inicio, fecha_fin):
     conn = get_conn()
     try:
-        df_ventas = pd.read_sql("SELECT fecha, id_vendedor, SUM(venta_unidades * p.precio_estandar) as venta_pan FROM despacho d JOIN productos p ON d.id_producto = p.id WHERE fecha BETWEEN %s AND %s GROUP BY fecha, id_vendedor", conn, params=(fecha_inicio, fecha_fin))
+        # 1. Extraemos la base cruda sin cálculos económicos ciegos
+        df_despacho = pd.read_sql("""
+            SELECT d.fecha, d.id_vendedor, v.nombre as vendedor_nombre, v.dscto_esp, 
+                   d.id_producto, p.nombre as producto_nombre, p.precio_estandar, d.venta_unidades 
+            FROM despacho d 
+            JOIN productos p ON d.id_producto = p.id
+            JOIN vendedores v ON d.id_vendedor = v.id
+            WHERE d.fecha BETWEEN %s AND %s
+        """, conn, params=(fecha_inicio, fecha_fin))
+        
+        # 2. Replicamos la alquimia de precios para que el reporte cuadre con el inventario
+        if not df_despacho.empty:
+            precios_hugo = {
+                "Lengua": 1150, "Lengua 6": 1000, "Frica": 1250, "Lengua XL (25)": 1350,
+                "Molde XL": 1400, "Molde": 1300, "Pizza Individual": 1050, "Frica XL": 1350,
+                "Hallulla": 1050, "Tapadito": 1400, "Pan Rallado": 550, "Pizza Familiar": 1300,
+                "Lengua XXL (30)": 1950, "Lengua XXXL (35)": 2350, "Lengua XXXXL (40)": 2650
+            }
+            
+            def calcular_monto_real(row):
+                vend = str(row['vendedor_nombre']).strip()
+                if vend == "Hugo Palacios":
+                    prod = str(row['producto_nombre']).strip()
+                    precio = precios_hugo.get(prod, row['precio_estandar'])
+                else:
+                    desc = float(row['dscto_esp']) if pd.notna(row['dscto_esp']) else 0.0
+                    precio = row['precio_estandar'] * (1 - desc)
+                return row['venta_unidades'] * precio
+
+            df_despacho['venta_pan'] = df_despacho.apply(calcular_monto_real, axis=1)
+            df_ventas = df_despacho.groupby(['fecha', 'id_vendedor'])['venta_pan'].sum().reset_index()
+        else:
+            df_ventas = pd.DataFrame(columns=['fecha', 'id_vendedor', 'venta_pan'])
+
+        # 3. Cruzamos con finanzas (Ya con la doble contabilización corregida)
         df_fin = pd.read_sql("SELECT * FROM finanzas WHERE fecha BETWEEN %s AND %s", conn, params=(fecha_inicio, fecha_fin))
-        df_movs = pd.read_sql("SELECT fecha, id_vendedor, SUM(CASE WHEN tipo_movimiento='ABONO' THEN monto ELSE 0 END) as abonos_creditos FROM movimientos_credito WHERE fecha BETWEEN %s AND %s GROUP BY fecha, id_vendedor", conn, params=(fecha_inicio, fecha_fin))
         
         df_full = pd.merge(df_fin, df_ventas, on=['fecha', 'id_vendedor'], how='outer')
-        df_full = pd.merge(df_full, df_movs, on=['fecha', 'id_vendedor'], how='outer')
         
-        for c in ['venta_pan', 'creditos_cobrados', 'abonos_creditos', 'bencina', 'sueldo', 'otros_gastos_monto', 'creditos_otorgados', 'descuentos_total', 'efectivo_rendido', 'transferencia_rendida', 'pago_centralizado']:
+        for c in ['venta_pan', 'creditos_cobrados', 'bencina', 'sueldo', 'otros_gastos_monto', 'creditos_otorgados', 'descuentos_total', 'efectivo_rendido', 'transferencia_rendida', 'pago_centralizado']:
             if c in df_full.columns: df_full[c] = df_full[c].fillna(0).astype(float)
             else: df_full[c] = 0.0
 
-        # EL FILTRO MAESTRO: Excluye al Corriente Y a Kilaco Venta desde el motor SQL
         vends = pd.read_sql("""
             SELECT id as id_vendedor, nombre as "Vendedor" 
             FROM vendedores 
@@ -524,7 +609,8 @@ def obtener_resumen_global(fecha_inicio, fecha_fin):
         
         df_full = pd.merge(df_full, vends, on='id_vendedor', how='inner')
         
-        df_full['Total Ingresos'] = df_full['venta_pan'] + df_full['creditos_cobrados'] + df_full['abonos_creditos']
+        # 4. Matemáticas de cierre
+        df_full['Total Ingresos'] = df_full['venta_pan'] + df_full['creditos_cobrados']
         df_full['Total Gastos'] = df_full['bencina'] + df_full['sueldo'] + df_full['otros_gastos_monto'] + df_full['creditos_otorgados'] + df_full['descuentos_total']
         df_full['Deuda Neta'] = df_full['Total Ingresos'] - df_full['Total Gastos']
         df_full['Pagado'] = df_full['efectivo_rendido'] + df_full['transferencia_rendida'] + df_full['pago_centralizado']
@@ -667,24 +753,107 @@ def crud_sugerencia_corriente(accion, datos=None, id_sug=None):
     finally:
         conn.close()
 
-def registrar_movimiento_credito(fecha, id_cli, id_vend, tipo, monto, detalle):
+def registrar_movimiento_credito(fecha, id_cli, id_vend, tipo, monto, detalle, usuario="Sistema"):
     conn = get_conn()
     try:
         with conn.cursor() as c:
-            c.execute("INSERT INTO movimientos_credito (fecha, id_cliente, id_vendedor, tipo_movimiento, monto, detalle) VALUES (%s,%s,%s,%s,%s,%s)",
-                      (fecha, id_cli, id_vend, tipo, monto, detalle))
+            c.execute("""INSERT INTO movimientos_credito 
+                         (fecha, id_cliente, id_vendedor, tipo_movimiento, monto, detalle, creado_por) 
+                         VALUES (%s,%s,%s,%s,%s,%s,%s)""",
+                      (fecha, id_cli, id_vend, tipo, monto, detalle, usuario))
         conn.commit()
     finally:
         conn.close()
 
-def registrar_transferencia(fecha, id_v, monto, metodo, banco, tipo, verif, comentario):
+def editar_movimiento_credito(id_mov, fecha, id_cli, id_vend, tipo, monto, detalle, usuario):
+    """Actualiza una operación de crédito dejando huella forense."""
+    conn = get_conn()
+    try:
+        with conn.cursor() as c:
+            c.execute("""UPDATE movimientos_credito 
+                         SET fecha=%s, id_cliente=%s, id_vendedor=%s, tipo_movimiento=%s, monto=%s, detalle=%s, 
+                             modificado_por=%s, ultima_modificacion=NOW() 
+                         WHERE id=%s""",
+                      (fecha, id_cli, id_vend, tipo, monto, detalle, usuario, id_mov))
+        conn.commit()
+    finally:
+        conn.close()
+
+def obtener_creditos_editables(es_jefatura, id_vendedor_restrictivo=None):
+    """Filtro de Candado Temporal Laxo (2 días) para el formulario de corrección de créditos."""
+    conn = get_conn()
+    try:
+        limite_temporal = "" if es_jefatura else "WHERE m.fecha >= CURRENT_DATE - INTERVAL '2 days'"
+        
+        filtro_vendedor = ""
+        if id_vendedor_restrictivo:
+            prefijo = "AND" if not es_jefatura else "WHERE"
+            filtro_vendedor = f"{prefijo} m.id_vendedor = {id_vendedor_restrictivo}"
+            
+        query = f"""
+            SELECT m.id, m.fecha, m.monto, m.tipo_movimiento, 
+                   v.nombre as "Repartidor", c.nombre as "Cliente", 
+                   m.id_cliente, m.id_vendedor
+            FROM movimientos_credito m
+            JOIN vendedores v ON m.id_vendedor = v.id
+            JOIN clientes c ON m.id_cliente = c.id
+            {limite_temporal}
+            {filtro_vendedor}
+            ORDER BY m.fecha DESC, m.id DESC
+        """
+        return pd.read_sql(query, conn)
+    finally:
+        conn.close()
+
+def registrar_transferencia(fecha, id_v, monto, metodo, banco, tipo, verif, comentario, usuario="Sistema"):
     conn = get_conn()
     try:
         with conn.cursor() as c:
             verif_int = 1 if verif else 0
-            c.execute("INSERT INTO transferencias (fecha, id_vendedor, monto, metodo_pago, banco_emisor, verificado, tipo_transferencia, comentario) VALUES (%s,%s,%s,%s,%s,%s,%s,%s)",
-                      (fecha, id_v, monto, metodo, banco, verif_int, tipo, comentario))
+            c.execute("""INSERT INTO transferencias 
+                         (fecha, id_vendedor, monto, metodo_pago, banco_emisor, verificado, tipo_transferencia, comentario, creado_por) 
+                         VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
+                      (fecha, id_v, monto, metodo, banco, verif_int, tipo, comentario, usuario))
         conn.commit()
+    finally:
+        conn.close()
+
+def editar_transferencia(id_transf, fecha, id_v, monto, metodo, banco, tipo, usuario):
+    """Actualiza una transferencia existente dejando huella forense."""
+    conn = get_conn()
+    try:
+        with conn.cursor() as c:
+            c.execute("""UPDATE transferencias 
+                         SET fecha=%s, id_vendedor=%s, monto=%s, metodo_pago=%s, banco_emisor=%s, tipo_transferencia=%s, 
+                             modificado_por=%s, ultima_modificacion=NOW() 
+                         WHERE id=%s""",
+                      (fecha, id_v, monto, metodo, banco, tipo, usuario, id_transf))
+        conn.commit()
+    finally:
+        conn.close()
+
+def obtener_transferencias_editables(es_jefatura, id_vendedor_restrictivo=None):
+    """Filtro de Candado Temporal Laxo (2 días) para el formulario de corrección."""
+    conn = get_conn()
+    try:
+        # Lógica: Si es jefatura, ve todo. Si es empleado, ve solo los últimos 2 días.
+        limite_temporal = "" if es_jefatura else "WHERE t.fecha >= CURRENT_DATE - INTERVAL '2 days'"
+        
+        # Lógica: Si es repartidor, solo ve las suyas.
+        filtro_vendedor = ""
+        if id_vendedor_restrictivo:
+            prefijo = "AND" if not es_jefatura else "WHERE"
+            filtro_vendedor = f"{prefijo} t.id_vendedor = {id_vendedor_restrictivo}"
+            
+        query = f"""
+            SELECT t.id, t.fecha, t.monto, v.nombre as "Repartidor", t.metodo_pago, t.banco_emisor, t.tipo_transferencia
+            FROM transferencias t
+            JOIN vendedores v ON t.id_vendedor = v.id
+            {limite_temporal}
+            {filtro_vendedor}
+            ORDER BY t.fecha DESC, t.id DESC
+        """
+        return pd.read_sql(query, conn)
     finally:
         conn.close()
 
@@ -711,6 +880,37 @@ def guardar_movimiento_caja(fecha, area, desc, item, ing_ef, ing_tr, eg_ef, eg_t
                       (fecha, area, desc, item, ing_ef, ing_tr, eg_ef, eg_tr))
         conn.commit()
         st.cache_data.clear() # Limpiamos la caché para que la tabla se actualice al instante
+    finally:
+        conn.close()
+
+def editar_movimiento_caja_mill(id_mov, fecha, id_cat, id_subcat, id_entidad, nombre_entidad, detalle, ing_ef, ing_tr, eg_ef, eg_tr, usuario):
+    """Actualiza una operación de caja chica dejando huella forense."""
+    conn = get_conn()
+    try:
+        with conn.cursor() as c:
+            c.execute("""
+                UPDATE caja_movimientos 
+                SET fecha=%s, id_categoria=%s, id_subcategoria=%s, id_entidad=%s, descripcion=%s, item=%s, 
+                    ingreso_efectivo=%s, ingreso_transferencia=%s, egreso=%s, egreso_transferencia=%s, 
+                    modificado_por=%s, ultima_modificacion=NOW()
+                WHERE id=%s
+            """, (fecha, id_cat, id_subcat, id_entidad, nombre_entidad, detalle, ing_ef, ing_tr, eg_ef, eg_tr, usuario, id_mov))
+        conn.commit()
+        st.cache_data.clear()
+    finally:
+        conn.close()
+
+def obtener_caja_editables(area, es_jefatura):
+    """Filtro de Candado Temporal Laxo (2 días) para corrección de caja."""
+    conn = get_conn()
+    try:
+        limite_temporal = "" if es_jefatura else "AND fecha >= CURRENT_DATE - INTERVAL '2 days'"
+        query = f"""
+            SELECT * FROM caja_movimientos 
+            WHERE area=%s {limite_temporal}
+            ORDER BY fecha DESC, id DESC
+        """
+        return pd.read_sql(query, conn, params=(area,))
     finally:
         conn.close()
 
@@ -771,6 +971,22 @@ def guardar_movimiento_caja_mill(fecha, area, id_cat, id_subcat, id_entidad, nom
             """, (fecha, area, id_cat, id_subcat, id_entidad, nombre_entidad, detalle, ing_ef, ing_tr, eg_ef, eg_tr, usuario, rol))
         conn.commit()
         st.cache_data.clear() # Limpiamos la caché para que la tabla se actualice al instante
+    finally:
+        conn.close()
+
+def obtener_caja_mayor_global(fecha):
+    """Ignora el área y extrae la consolidación total de la panadería para el día seleccionado."""
+    conn = get_conn()
+    try:
+        query = """
+            SELECT id, fecha, area, descripcion as entidad, item as detalle, 
+                   ingreso_efectivo, ingreso_transferencia, 
+                   egreso as egreso_efectivo, egreso_transferencia, rol_creador 
+            FROM caja_movimientos 
+            WHERE fecha=%s
+            ORDER BY id DESC
+        """
+        return pd.read_sql(query, conn, params=(fecha,))
     finally:
         conn.close()
 
@@ -968,11 +1184,21 @@ def get_finanzas_corriente(fecha, id_v):
         conn.close()
 
 def save_finanzas_corriente(fecha, id_v, d):
-    """Guarda la rendición del corriente, incluyendo la deuda del pan especial sumada en recaudo_total."""
+    """Guarda la rendición del corriente, purgando tipos NumPy para evitar crasheos de psycopg2."""
     conn = get_conn()
-    gastos = d['bencina'] + d['sueldo'] + d['otros'] + d['comision']
-    # El recaudo total ya viene con el pan especial sumado desde la interfaz
-    saldo = d['recaudo_total'] - gastos - d['efec'] - d['trans']
+    
+    # EL PURIFICADOR
+    venta = int(d['venta'])
+    recaudo = int(d['recaudo_total'])
+    comision = int(d['comision'])
+    bencina = int(d['bencina'])
+    sueldo = int(d['sueldo'])
+    otros = int(d['otros'])
+    efec = int(d['efec'])
+    trans = int(d['trans'])
+    
+    gastos = bencina + sueldo + otros + comision
+    saldo = recaudo - gastos - efec - trans
     
     try:
         with conn.cursor() as c:
@@ -980,10 +1206,10 @@ def save_finanzas_corriente(fecha, id_v, d):
             ex = c.fetchone()
             if ex:
                 c.execute("""UPDATE finanzas_corriente SET venta_diaria=%s, recaudo_diario=%s, comision=%s, bencina=%s, sueldo=%s, otros_gastos=%s, detalle_gastos=%s, total_gastos=%s, pago_efectivo=%s, pago_transferencia=%s, saldo_final=%s WHERE id=%s""", 
-                          (d['venta'], d['recaudo_total'], d['comision'], d['bencina'], d['sueldo'], d['otros'], d['det'], gastos, d['efec'], d['trans'], saldo, ex[0]))
+                          (venta, recaudo, comision, bencina, sueldo, otros, d['det'], gastos, efec, trans, saldo, ex[0]))
             else:
                 c.execute("""INSERT INTO finanzas_corriente (fecha, id_vendedor, venta_diaria, recaudo_diario, comision, bencina, sueldo, otros_gastos, detalle_gastos, total_gastos, pago_efectivo, pago_transferencia, saldo_final) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""", 
-                          (fecha, id_v, d['venta'], d['recaudo_total'], d['comision'], d['bencina'], d['sueldo'], d['otros'], d['det'], gastos, d['efec'], d['trans'], saldo))
+                          (fecha, id_v, venta, recaudo, comision, bencina, sueldo, otros, d['det'], gastos, efec, trans, saldo))
         conn.commit()
     finally:
         conn.close()
@@ -1080,6 +1306,30 @@ def obtener_estado_creditos_vendedor(id_vendedor, fecha_corte):
     finally:
         conn.close()
 
+def obtener_historial_movimientos_credito(f_ini, f_fin, id_vendedor=None):
+    """Extrae el historial de movimientos de crédito (fiados y abonos) para la nueva auditoría visual."""
+    conn = get_conn()
+    try:
+        filtro_vendedor = f"AND m.id_vendedor = {id_vendedor}" if id_vendedor else ""
+        query = f"""
+            SELECT TO_CHAR(m.fecha, 'DD/MM/YYYY') as "Fecha", 
+                   v.nombre as "Repartidor", c.nombre as "Cliente", 
+                   m.tipo_movimiento as "Tipo", m.monto as "Monto", m.detalle as "Detalle",
+                   m.fecha as fecha_real
+            FROM movimientos_credito m
+            JOIN vendedores v ON m.id_vendedor = v.id
+            JOIN clientes c ON m.id_cliente = c.id
+            WHERE m.fecha BETWEEN %s AND %s
+            {filtro_vendedor}
+            ORDER BY m.fecha DESC, m.id DESC
+        """
+        df = pd.read_sql(query, conn, params=(f_ini, f_fin))
+        if not df.empty:
+            df = df.drop(columns=['fecha_real'])
+        return df
+    finally:
+        conn.close()
+
 def obtener_reporte_transferencias_filtrado(fecha_inicio, fecha_fin, id_vendedor):
     """Reporte específico de transferencias para un rango de fechas."""
     conn = get_conn()
@@ -1170,6 +1420,7 @@ def obtener_cobranzas_pendientes_especial():
             LEFT JOIN finanzas f ON d.fecha = f.fecha AND d.id_vendedor = f.id_vendedor
             WHERE f.id IS NULL AND d.fecha < CURRENT_DATE
             AND v.area IN ('especial', 'ambos') 
+            AND v.nombre NOT IN ('Kilaco Venta', 'Hugo Palacios') 
             ORDER BY d.fecha DESC, v.nombre ASC
         """
         df = pd.read_sql(query, conn)
@@ -1246,7 +1497,7 @@ def menu_view():
 
         st.divider()
 
-        ver_especial = rol in ["admin", "pan_especial", "supervisor", "repartidor_esp", "repartidor_corr", "cajero_integral"]
+        ver_especial = rol in ["admin", "pan_especial", "supervisor", "repartidor_esp", "repartidor_corr", "cajero_integral", "despacho_especial"]
         ver_corriente = rol in ["admin", "pan_corriente", "supervisor", "repartidor_corr", "cajero_integral"]
 
         st.write("") 
@@ -1307,8 +1558,14 @@ def app_pan_especial():
     opciones_full = ["Insumos", "Producción", "Despacho", "Cobranza", "Clientes", "Créditos", "Transferencias", "Caja"]
     iconos_full   = ["box-seam", "tools",       "truck",     "currency-dollar", "people",   "credit-card", "bank",             "cash-stack"]
     
-    if rol in ["admin", "pan_especial", "supervisor", "cajero_integral"]:
+    if rol in ["admin", "pan_especial", "supervisor"]:
         menu_options = opciones_full; menu_icons = iconos_full; permiso_editar = True
+    elif rol == "cajero_integral":
+        indices = [3, 5, 6, 7] # Cobranza, Créditos, Transferencias, Caja
+        menu_options = [opciones_full[i] for i in indices]; menu_icons = [iconos_full[i] for i in indices]; permiso_editar = True
+    elif rol == "despacho_especial":
+        indices = [0, 1, 2, 3] # Insumos, Producción, Despacho, Cobranza
+        menu_options = [opciones_full[i] for i in indices]; menu_icons = [iconos_full[i] for i in indices]; permiso_editar = True
     elif rol == "repartidor_esp":
         indices = [2, 3, 4, 5, 6] 
         menu_options = [opciones_full[i] for i in indices]; menu_icons = [iconos_full[i] for i in indices]; permiso_editar = False
@@ -1343,12 +1600,14 @@ def app_pan_especial():
     lista_repartidores_esp = df_vend[df_vend['area'].isin(['especial', 'ambos'])]['nombre'].tolist()
     repartidores_corriente = df_vend[df_vend['area'].isin(['corriente', 'ambos'])]['nombre'].tolist()
     
+    # LISTA PURA: Extraemos a Kilaco Venta para usarla en Créditos y Transferencias
+    lista_repartidores_esp_puro = [r for r in lista_repartidores_esp if r != "Kilaco Venta"]
+    
     nombre_vendedor_actual = None
     if es_repartidor and mi_id_vendedor:
         match = df_vend[df_vend['id'] == mi_id_vendedor]
         if not match.empty: nombre_vendedor_actual = match['nombre'].iloc[0]
 
-    # Inteligencia de UI: El índice por defecto es nulo (neutral) a menos que sea un repartidor
     idx_defecto = lista_repartidores_todos.index(nombre_vendedor_actual) if es_repartidor and nombre_vendedor_actual in lista_repartidores_todos else None
 
     # --- 4. VISTAS ---
@@ -1387,13 +1646,13 @@ def app_pan_especial():
                     col_b4.metric("Saldo Final", f"{fin_b} un.", delta=f"{delta_hoy} flujo hoy" if sal_b or ret_b else None, delta_color="normal" if delta_hoy >= 0 else "inverse")
                     
                     st.write("")
-                    c_btn1, c_btn2, c_btn3 = st.columns([1, 2, 1])
-                    if permiso_editar and c_btn2.button("Guardar", type="primary", use_container_width=True):
+                    # GRILLA IZQUIERDA [1, 4]
+                    c_btn, _ = st.columns([1, 4])
+                    if permiso_editar and c_btn.button("Guardar", type="primary", use_container_width=True):
                         guardar_bandejas(f_ins, id_vban, data_ban['ant'], sal_b, ret_b)
                         st.success(f"Guardado.")
                         time.sleep(0.5)
                         st.rerun()
-                
             
             st.write("")
             st.markdown(f"<h5 style='display:flex; align-items:center;'>{svg_chart} Resumen Global</h5>", unsafe_allow_html=True)
@@ -1432,11 +1691,19 @@ def app_pan_especial():
                 }
                 orden = ["id", "id_cb", "factor", "gasto_cajas", "nombre", "stock_inicial_cajas", "stock_inicial_bolsas", "ingreso_cajas", "produccion_hoy_unidades", "stock_cajas_final", "stock_bolsas_final"]
                 
-                df_ed_bol = st.data_editor(df_bolsas[orden], column_config=cols_bol, use_container_width=True, hide_index=True, key="ed_bolsas", disabled=not permiso_editar, height=350)
+                if not df_bolsas.empty:
+                    df_visual = df_bolsas[orden]
+                    def estilizar_bolsas(row):
+                        return ['background-color: #FFFFFF; font-weight: 600; color: #1F2937;' if c in ['ingreso_cajas', 'produccion_hoy_unidades'] else 'background-color: #F8F9FA; color: #6C757D;' for c in row.index]
+                    df_styled = df_visual.style.apply(estilizar_bolsas, axis=1)
+                else:
+                    df_styled = pd.DataFrame()
+
+                df_ed_bol = st.data_editor(df_styled, column_config=cols_bol, use_container_width=True, hide_index=True, key="ed_bolsas", disabled=not permiso_editar, height=350)
                 
                 st.write("")
-                c_btn_b1, c_btn_b2, c_btn_b3 = st.columns([1, 2, 1])
-                if permiso_editar and c_btn_b2.button("Actualizar Stock", type="primary", use_container_width=True):
+                c_btn_b, _ = st.columns([1, 4])
+                if permiso_editar and c_btn_b.button("Actualizar Stock", type="primary", use_container_width=True):
                     gasto = df_ed_bol['produccion_hoy_unidades'] / df_ed_bol['factor']
                     df_ed_bol['stock_cajas_final'] = df_ed_bol['stock_inicial_cajas'] + df_ed_bol['ingreso_cajas'] - gasto
                     guardar_bolsas_manual(f_ins, df_ed_bol)
@@ -1456,7 +1723,6 @@ def app_pan_especial():
         
         df_st = obtener_datos_stock(f_st)
         
-        # --- IMPOSICIÓN DEL ORDEN CULTURAL ---
         orden_cultural_prod = [
             "Lengua", "Lengua 6", "Lengua XL (25)", "Lengua XXL (30)", 
             "Lengua XXXL (35)", "Lengua XXXXL (40)", "Frica", "Frica XL", 
@@ -1465,7 +1731,6 @@ def app_pan_especial():
         ]
         
         if not df_st.empty:
-            # Transformamos la columna a una categoría ordenada rígidamente
             df_st['nombre_cat'] = pd.Categorical(df_st['nombre'].str.strip(), categories=orden_cultural_prod, ordered=True)
             df_st = df_st.sort_values('nombre_cat').drop(columns=['nombre_cat'])
         
@@ -1484,18 +1749,27 @@ def app_pan_especial():
         orden = ["id", "nombre", "stock_inicial", "fabricacion", "salida_calculada", "stock_final", "produccion_dia_siguiente", "bolsas_necesarias", "cant_sacos"]
         
         with st.container(border=True):
-            # Altura dinámica: 36px por fila + 42px de encabezado base
             altura_dinamica_prod = (len(df_st) * 36) + 42 if not df_st.empty else 400
             
-            df_ed = st.data_editor(df_st[[c for c in orden if c in df_st.columns]], column_config=cols_prod, use_container_width=True, hide_index=True, key="st_editor", height=altura_dinamica_prod, disabled=not permiso_editar)
+            def estilizar_produccion(row):
+                return ['background-color: #FFFFFF; font-weight: 600; color: #1F2937;' if c == 'fabricacion' else 'background-color: #F8F9FA; color: #6C757D;' for c in row.index]
+
+            if not df_st.empty:
+                df_visual = df_st[[c for c in orden if c in df_st.columns]]
+                df_styled = df_visual.style.apply(estilizar_produccion, axis=1)
+            else:
+                df_styled = pd.DataFrame()
+
+            df_ed = st.data_editor(df_styled, column_config=cols_prod, use_container_width=True, hide_index=True, key="st_editor", height=altura_dinamica_prod, disabled=not permiso_editar)
             
             st.write("")
-            c_btn1, c_btn2, c_btn3 = st.columns([1, 2, 1])
-            if permiso_editar and c_btn2.button("Guardar", type="primary", use_container_width=True):
+            c_btn, _ = st.columns([1, 4])
+            if permiso_editar and c_btn.button("Guardar", type="primary", use_container_width=True):
                 for i, r in df_ed.iterrows():
-                    st_fin = r['stock_inicial'] + r['fabricacion'] - r['salida_calculada']
+                    fab_val = int(r['fabricacion'])
+                    st_fin = r['stock_inicial'] + fab_val - r['salida_calculada']
                     nec = max(0, r['produccion_dia_siguiente'] - st_fin)
-                    registrar_produccion(f_st, r['id'], r['stock_inicial'], r['fabricacion'], st_fin, nec)
+                    registrar_produccion(f_st, r['id'], r['stock_inicial'], fab_val, st_fin, nec)
                 st.success("Guardado.")
                 time.sleep(0.5)
                 st.rerun()
@@ -1514,28 +1788,30 @@ def app_pan_especial():
         svg_box = '''<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" fill="#556B2F" class="bi bi-box-seam" viewBox="0 0 16 16" style="margin-right: 8px; margin-bottom: 4px;"><path d="M8.186 1.113a.5.5 0 0 0-.372 0L1.846 3.5l2.404.961L10.404 2zm3.564 1.426L5.596 5 8 5.961 14.154 3.5zm3.25 1.7-6.5 2.6v7.922l6.5-2.6V4.24zM7.5 14.762V6.84L1 4.239v7.923zM7.443.184a1.5 1.5 0 0 1 1.114 0l7.129 2.852A.5.5 0 0 1 16 3.5v8.662a1 1 0 0 1-.629.958l-7.185 2.872a1.5 1.5 0 0 1-1.114 0l-7.185-2.872A1 1 0 0 1 0 12.162V3.5a.5.5 0 0 1 .314-.464z"/></svg>'''
         
         st.write("")
-        st.markdown(f"<h4 style='display:flex; align-items:center;'>{svg_truck} Asignación</h4>", unsafe_allow_html=True)
         
         if v_bo:
             id_vb = dict_vend[v_bo]
-            estado_carga = not permiso_editar or es_repartidor
             
-            with st.form("add_carga", clear_on_submit=True, border=False):
-                cf1, cf2, cf3 = st.columns([2, 1, 1], vertical_alignment="bottom")
-                p_b = cf1.selectbox("Producto", df_prod['nombre'], disabled=estado_carga)
-                q_b = cf2.number_input("Cantidad", min_value=1, value=None, placeholder="0", disabled=estado_carga)
+            # --- MURO VISUAL: La Asignación solo existe si NO eres repartidor ---
+            if not es_repartidor:
+                st.markdown(f"<h4 style='display:flex; align-items:center;'>{svg_truck} Asignación</h4>", unsafe_allow_html=True)
                 
-                if cf3.form_submit_button("Cargar", disabled=estado_carga, type="primary", use_container_width=True):
-                    if q_b:
-                        id_pb = int(df_prod[df_prod['nombre']==p_b]['id'].values[0])
-                        registrar_carga(f_bo, id_vb, id_pb, q_b)
-                        st.rerun()
-                        
-            if es_repartidor: 
-                st.info("Sin permisos de edición.")
+                estado_carga = not permiso_editar
+                
+                with st.form("add_carga", clear_on_submit=True, border=False):
+                    cf1, cf2, cf3 = st.columns([2, 1, 1], vertical_alignment="bottom")
+                    p_b = cf1.selectbox("Producto", df_prod['nombre'], disabled=estado_carga)
+                    q_b = cf2.number_input("Cantidad", min_value=1, value=None, placeholder="0", disabled=estado_carga)
+                    
+                    if cf3.form_submit_button("Cargar", disabled=estado_carga, type="primary", use_container_width=True):
+                        if q_b:
+                            id_pb = int(df_prod[df_prod['nombre']==p_b]['id'].values[0])
+                            registrar_carga(f_bo, id_vb, id_pb, q_b)
+                            st.rerun()
+                
+                st.divider()
             
-            st.divider()
-            
+            # --- EL MANIFIESTO DE CARGA: Visible para todos ---
             st.markdown(f"<h5 style='display:flex; align-items:center;'>{svg_box} En Vehículo</h5>", unsafe_allow_html=True)
             
             df_c = obtener_despacho_vehiculo(f_bo, id_vb)
@@ -1547,17 +1823,22 @@ def app_pan_especial():
                     "saldo_anterior": st.column_config.NumberColumn("🔒 Ant.", disabled=True, width="small"), 
                     "carga": st.column_config.NumberColumn("Carga", min_value=0, required=True, disabled=not permiso_editar, width="small")
                 }
-                df_c_ed = st.data_editor(df_c, column_config=cols, hide_index=True, use_container_width=True, key="edit_despacho", disabled=not permiso_editar)
+                
+                def estilizar_despacho(row):
+                    return ['background-color: #FFFFFF; font-weight: 600; color: #1F2937;' if c == 'carga' else 'background-color: #F8F9FA; color: #6C757D;' for c in row.index]
+                
+                df_styled_c = df_c.style.apply(estilizar_despacho, axis=1)
+                
+                df_c_ed = st.data_editor(df_styled_c, column_config=cols, hide_index=True, use_container_width=True, key="edit_despacho", disabled=not permiso_editar)
                 
                 st.write("")
-                c_btn1, c_btn2, c_btn3 = st.columns([1, 2, 1])
-                if permiso_editar and not es_repartidor and c_btn2.button("Guardar", type="primary", use_container_width=True):
+                c_btn, _ = st.columns([1, 4])
+                if permiso_editar and not es_repartidor and c_btn.button("Guardar", type="primary", use_container_width=True):
                     actualizar_carga_masiva(df_c_ed)
                     time.sleep(0.5)
                     st.rerun()
             else: 
                 st.info("Vehículo vacío.")
-        
 
     elif seleccion == "Cobranza":
         st.title("Cobranza")
@@ -1570,7 +1851,15 @@ def app_pan_especial():
         c1, c2, c3 = st.columns([2, 3, 1], vertical_alignment="bottom")
         f_of = c1.date_input("Fecha", date.today()-timedelta(days=1), format="DD/MM/YYYY")
         
-        v_of = c2.selectbox("Repartidor", lista_repartidores_todos, index=idx_defecto, placeholder="Seleccione un repartidor...", disabled=es_repartidor, key="sel_cob_rep")
+        # --- FILTRO DUAL ---
+        if rol == "despacho_especial":
+            lista_rep_cob = [r for r in lista_repartidores_todos if r in repartidores_corriente or r == "Kilaco Venta"]
+        else:
+            lista_rep_cob = lista_repartidores_todos
+            
+        idx_def_cob = lista_rep_cob.index(nombre_vendedor_actual) if es_repartidor and nombre_vendedor_actual in lista_rep_cob else None
+        
+        v_of = c2.selectbox("Repartidor", lista_rep_cob, index=idx_def_cob, placeholder="Seleccione un repartidor...", disabled=es_repartidor, key="sel_cob_rep")
         
         if not es_repartidor:
             texto_boton = "Pendientes ▲" if st.session_state.get("mostrar_pendientes", False) else "Pendientes ▼"
@@ -1587,7 +1876,13 @@ def app_pan_especial():
                     st.success("Al día.")
                 st.write("") 
         
-        tab_inv, tab_fin, tab_rep = st.tabs(["Inventario", "Rendición", "Reporte"])
+        # --- MUTACIÓN ARQUITECTÓNICA DE PESTAÑAS ---
+        if rol == "despacho_especial":
+            tabs_cob = st.tabs(["Inventario"])
+            tab_inv = tabs_cob[0]; tab_fin = None; tab_rep = None
+        else:
+            tabs_cob = st.tabs(["Inventario", "Rendición", "Reporte"])
+            tab_inv = tabs_cob[0]; tab_fin = tabs_cob[1]; tab_rep = tabs_cob[2]
         
         # --- PESTAÑA 1: INVENTARIO ---
         with tab_inv:
@@ -1600,24 +1895,10 @@ def app_pan_especial():
                     df_inv = obtener_planilla(f_of, id_vo)
                     total_venta = 0 
                     
-                    # --- IMPOSICIÓN DEL ORDEN CULTURAL (INVENTARIO CORREGIDO) ---
-                    # Se utilizan los nombres exactos de la tabla de productos para que la categorización no falle.
                     orden_cultural_inv = [
-                        "Lengua", 
-                        "Lengua 6", 
-                        "Frica", 
-                        "Lengua XL (25)", 
-                        "Pizza Individual", 
-                        "Pizza Familiar", 
-                        "Hallulla", 
-                        "Molde", 
-                        "Frica XL", 
-                        "Tapadito", 
-                        "Molde XL", 
-                        "Pan Rallado", 
-                        "Lengua XXL (30)", 
-                        "Lengua XXXL (35)", 
-                        "Lengua XXXXL (40)"
+                        "Lengua", "Lengua 6", "Frica", "Lengua XL (25)", "Pizza Individual", 
+                        "Pizza Familiar", "Hallulla", "Molde", "Frica XL", "Tapadito", 
+                        "Molde XL", "Pan Rallado", "Lengua XXL (30)", "Lengua XXXL (35)", "Lengua XXXXL (40)"
                     ]
                     
                     if not df_inv.empty:
@@ -1636,10 +1917,14 @@ def app_pan_especial():
                                 "venta": st.column_config.NumberColumn("🔒 Venta", disabled=True, width="small"), 
                                 "total": st.column_config.NumberColumn("🔒 Total", disabled=True, format="$%d", width="small")}
                         
-                        # Altura dinámica para evitar el scroll en cobranza
                         altura_dinamica_inv = (len(df_d) * 36) + 42
                         
-                        df_ed_inv = st.data_editor(df_d, column_config=cols, hide_index=True, use_container_width=True, key="inv_ed", height=altura_dinamica_inv, disabled=not permiso_editar)
+                        def estilizar_inventario(row):
+                            return ['background-color: #FFFFFF; font-weight: 600; color: #1F2937;' if c in ['devolucion', 'saldo_final'] else 'background-color: #F8F9FA; color: #6C757D;' for c in row.index]
+                        
+                        df_styled_inv = df_d.style.apply(estilizar_inventario, axis=1)
+
+                        df_ed_inv = st.data_editor(df_styled_inv, column_config=cols, hide_index=True, use_container_width=True, key="inv_ed", height=altura_dinamica_inv, disabled=not permiso_editar)
                         df_ed_inv['v_real'] = (df_ed_inv['saldo_anterior']+df_ed_inv['carga']-df_ed_inv['devolucion']-df_ed_inv['saldo_final']).clip(lower=0)
                         total_venta = (df_ed_inv['v_real']*df_ed_inv['precio_estandar']).sum()
                         
@@ -1648,121 +1933,135 @@ def app_pan_especial():
                         ci.metric("Venta Bruta", fmt_clp(total_venta))
                         if permiso_editar and cs.button("Guardar", type="primary", use_container_width=True, key="b_inv"): 
                             guardar_oficina(df_ed_inv, f_of, id_vo); st.success("Guardado"); time.sleep(0.5); st.rerun()
-                    else: 
-                        st.info("Sin registros físicos para procesar.")
-                else:
-                    st.info("👆 Seleccione un repartidor para auditar su inventario.")
+              
         
         # --- PESTAÑA 2: RENDICIÓN ---
-        with tab_fin:
-            st.write("")
-            if v_of:
-                id_vo = dict_vend[v_of]
-                es_repartidor_de_corriente = v_of in repartidores_corriente
-                es_kilaco_venta = v_of == "Kilaco Venta"
-                es_solo_fisico = es_repartidor_de_corriente or es_kilaco_venta
-                
-                if es_solo_fisico:
-                    st.info("No requiere rendición de caja.")
-                else:
-                    # Capturamos la venta bruta desde la lectura de la base de datos para asegurar congruencia
-                    df_inv_fin = obtener_planilla(f_of, id_vo)
-                    total_venta_fin = 0
-                    if not df_inv_fin.empty:
-                        total_venta_fin = df_inv_fin['total'].sum()
+        if tab_fin:
+            with tab_fin:
+                st.write("")
+                if v_of:
+                    id_vo = dict_vend[v_of]
+                    es_repartidor_de_corriente = v_of in repartidores_corriente
+                    es_kilaco_venta = v_of == "Kilaco Venta"
+                    es_solo_fisico = es_repartidor_de_corriente or es_kilaco_venta
+                    
+                    if es_solo_fisico:
+                        st.info("No requiere rendición de caja.")
+                    else:
+                        df_inv_fin = obtener_planilla(f_of, id_vo)
+                        total_venta_fin = 0
+                        if not df_inv_fin.empty: total_venta_fin = df_inv_fin['total'].sum()
 
-                    fin = get_finanzas(f_of, id_vo)
-                    with st.container(border=True):
-                        st.markdown(f"<h5 style='display:flex; align-items:center;'>{svg_ren} Flujo de Caja</h5>", unsafe_allow_html=True)
-                        st.write("")
-                        
-                        ph_step1 = st.container()
-                        
-                        st.divider()
-                        st.markdown("**2. Gastos y Movimientos**")
-                        
-                        c_gr1, c_gr2, c_gr3 = st.columns(3)
-                        with c_gr1:
-                            st.caption("Cobro de Créditos")
-                            df_cc = st.data_editor(pd.DataFrame([{"Detalle": fin.get('cc_det', "Varios"), "Monto": int(fin.get('cc', 0))}]), num_rows="dynamic", key="grid_cc", hide_index=True, column_config={"Monto": st.column_config.NumberColumn(format="$%d", required=True)}, disabled=not permiso_editar, use_container_width=True)
-                            t_cc = df_cc['Monto'].sum(); txt_cc = ", ".join(df_cc['Detalle'].astype(str).tolist())
-                        with c_gr2:
-                            st.caption("Créditos (Fiado)")
-                            df_co = st.data_editor(pd.DataFrame([{"Detalle": "Varios", "Monto": int(fin.get('co', 0))}]), num_rows="dynamic", key="grid_co", hide_index=True, column_config={"Monto": st.column_config.NumberColumn(format="$%d", required=True)}, disabled=not permiso_editar, use_container_width=True)
-                            t_co = df_co['Monto'].sum()
-                        with c_gr3:
-                            st.caption("Otros Gastos")
-                            df_om = st.data_editor(pd.DataFrame([{"Detalle": fin.get('od', "Varios"), "Monto": int(fin.get('om', 0))}]), num_rows="dynamic", key="grid_om", hide_index=True, column_config={"Monto": st.column_config.NumberColumn(format="$%d", required=True)}, disabled=not permiso_editar, use_container_width=True)
-                            t_om = df_om['Monto'].sum(); txt_om = ", ".join(df_om['Detalle'].astype(str).tolist())
-                        
-                        st.write("")
-                        g1, g2, g3 = st.columns(3)
-                        bn = safe_int(g1.number_input("Bencina", value=val_gui(fin.get('bn',0)), step=1000, placeholder="0", disabled=not permiso_editar))
-                        su = safe_int(g2.number_input("Sueldo", value=val_gui(fin.get('su',0)), step=1000, placeholder="0", disabled=not permiso_editar))
-                        ds = safe_int(g3.number_input("Descuentos", value=val_gui(fin.get('ds',0)), step=500, placeholder="0", disabled=not permiso_editar))
-                        
-                        tot_ing = total_venta_fin + t_cc
-                        tot_gas = t_co + t_om + bn + su + ds
-                        deuda_neta = tot_ing - tot_gas
-                        
-                        with ph_step1:
-                            st.markdown("**1. Dinero Exigible**")
-                            ci1, ci2, ci3 = st.columns(3)
-                            ci1.metric("Venta Bruta (Física)", fmt_clp(total_venta_fin), "Retorno Inventario", delta_color="off")
-                            ci2.metric("Cobro de Créditos", fmt_clp(t_cc), "Fiados recuperados", delta_color="off")
-                            ci3.metric("Total a Rendir", fmt_clp(tot_ing), "Base de cálculo", delta_color="normal")
-                        
-                        st.divider()
-                        st.markdown(f"<h6 style='display:flex; align-items:center; color:#556B2F;'>{svg_pay} Cierre y Pagos</h6>", unsafe_allow_html=True)
-                        st.write("")
-                        
-                        st.markdown(f"<h4 style='color:#2C3E50;'>Total: {fmt_clp(deuda_neta)}</h4>", unsafe_allow_html=True)
-                        st.write("")
-                        
-                        r1, r2, r3 = st.columns(3)
-                        ef = safe_int(r1.number_input("Efectivo", value=val_gui(fin.get('ef',0)), step=1000, placeholder="0", disabled=not permiso_editar))
-                        tr = safe_int(r2.number_input("Transferencias", value=val_gui(fin.get('tr',0)), step=1000, placeholder="0", disabled=not permiso_editar))
-                        pc = safe_int(r3.number_input("Centralizado", value=val_gui(fin.get('pc',0)), step=1000, placeholder="0", disabled=not permiso_editar))
-                        
-                        saldo = deuda_neta - (ef + tr + pc)
-                        st.write("")
-                        
-                        c_sem, c_btn = st.columns([3, 1], vertical_alignment="center")
-                        estilo_base = "margin: 0; height: 42px; display: flex; align-items: center; justify-content: center; border-radius: 6px; font-weight: 600; font-size: 15px;"
-                        if saldo == 0: c_sem.markdown(f"<div style='{estilo_base} background-color:#F0FDF4; color:#166534; border: 1px solid #BBF7D0;'>Cuadratura Exacta</div>", unsafe_allow_html=True)
-                        elif saldo > 0: c_sem.markdown(f"<div style='{estilo_base} background-color:#FEF2F2; color:#991B1B; border: 1px solid #FECACA;'>Faltan {fmt_clp(saldo)}</div>", unsafe_allow_html=True)
-                        else: c_sem.markdown(f"<div style='{estilo_base} background-color:#FFFBEB; color:#92400E; border: 1px solid #FDE68A;'>Sobran {fmt_clp(abs(saldo))}</div>", unsafe_allow_html=True)
-                        
-                        if permiso_editar and c_btn.button("Guardar", type="primary", use_container_width=True, key="b_ren"):
-                            save_finanzas(f_of, id_vo, {"cc":t_cc, "cc_det":txt_cc, "co":t_co, "ds":ds, "bn":bn, "su":su, "om":t_om, "od":txt_om, "ef":ef, "tr":tr, "pc":pc})
-                            st.success("Guardado"); time.sleep(0.5); st.rerun()
-            else:
-                st.info("👆 Seleccione un repartidor para realizar su cuadratura de caja.")
+                        fin = get_finanzas(f_of, id_vo)
+                        with st.container(border=True):
+                            st.markdown(f"<h5 style='display:flex; align-items:center;'>{svg_ren} Flujo de Caja</h5>", unsafe_allow_html=True)
+                            st.write("")
+                            
+                            ph_step1 = st.container()
+                            
+                            st.divider()
+                            st.markdown("**2. Gastos y Movimientos**")
+                            
+                            c_gr1, c_gr2, c_gr3 = st.columns(3)
+                            with c_gr1:
+                                st.caption("Cobro de Créditos")
+                                df_cc = st.data_editor(pd.DataFrame([{"Detalle": fin.get('cc_det', "Varios"), "Monto": int(fin.get('cc', 0))}]), num_rows="dynamic", key="grid_cc", hide_index=True, column_config={"Monto": st.column_config.NumberColumn(format="$%d", required=True)}, disabled=not permiso_editar, use_container_width=True)
+                                t_cc = df_cc['Monto'].sum(); txt_cc = ", ".join(df_cc['Detalle'].astype(str).tolist())
+                            with c_gr2:
+                                st.caption("Créditos (Fiado)")
+                                df_co = st.data_editor(pd.DataFrame([{"Detalle": "Varios", "Monto": int(fin.get('co', 0))}]), num_rows="dynamic", key="grid_co", hide_index=True, column_config={"Monto": st.column_config.NumberColumn(format="$%d", required=True)}, disabled=not permiso_editar, use_container_width=True)
+                                t_co = df_co['Monto'].sum()
+                            with c_gr3:
+                                st.caption("Otros Gastos")
+                                df_om = st.data_editor(pd.DataFrame([{"Detalle": fin.get('od', "Varios"), "Monto": int(fin.get('om', 0))}]), num_rows="dynamic", key="grid_om", hide_index=True, column_config={"Monto": st.column_config.NumberColumn(format="$%d", required=True)}, disabled=not permiso_editar, use_container_width=True)
+                                t_om = df_om['Monto'].sum(); txt_om = ", ".join(df_om['Detalle'].astype(str).tolist())
+                            
+                            st.write("")
+                            g1, g2, g3 = st.columns(3)
+                            bn = safe_int(g1.number_input("Bencina", value=val_gui(fin.get('bn',0)), step=1000, placeholder="0", disabled=not permiso_editar))
+                            su = safe_int(g2.number_input("Sueldo", value=val_gui(fin.get('su',0)), step=1000, placeholder="0", disabled=not permiso_editar))
+                            ds = safe_int(g3.number_input("Descuentos", value=val_gui(fin.get('ds',0)), step=500, placeholder="0", disabled=not permiso_editar))
+                            
+                            tot_ing = total_venta_fin + t_cc
+                            tot_gas = t_co + t_om + bn + su + ds
+                            deuda_neta = tot_ing - tot_gas
+                            
+                            with ph_step1:
+                                st.markdown("**1. Dinero Exigible**")
+                                ci1, ci2, ci3 = st.columns(3)
+                                ci1.metric("Venta Bruta (Física)", fmt_clp(total_venta_fin), "Retorno Inventario", delta_color="off")
+                                ci2.metric("Cobro de Créditos", fmt_clp(t_cc), "Fiados recuperados", delta_color="off")
+                                ci3.metric("Total a Rendir", fmt_clp(tot_ing), "Base de cálculo", delta_color="normal")
+                            
+                            st.divider()
+                            st.markdown(f"<h6 style='display:flex; align-items:center; color:#556B2F;'>{svg_pay} Cierre y Pagos</h6>", unsafe_allow_html=True)
+                            st.write("")
+                            
+                            st.markdown(f"<h4 style='color:#2C3E50;'>Total: {fmt_clp(deuda_neta)}</h4>", unsafe_allow_html=True)
+                            st.write("")
+                            
+                            r1, r2, r3 = st.columns(3)
+                            ef = safe_int(r1.number_input("Efectivo", value=val_gui(fin.get('ef',0)), step=1000, placeholder="0", disabled=not permiso_editar))
+                            tr = safe_int(r2.number_input("Transferencias", value=val_gui(fin.get('tr',0)), step=1000, placeholder="0", disabled=not permiso_editar))
+                            pc = safe_int(r3.number_input("Centralizado", value=val_gui(fin.get('pc',0)), step=1000, placeholder="0", disabled=not permiso_editar))
+                            
+                            saldo = deuda_neta - (ef + tr + pc)
+                            st.write("")
+                            
+                            c_sem, c_btn = st.columns([3, 1], vertical_alignment="center")
+                            estilo_base = "margin: 0; height: 42px; display: flex; align-items: center; justify-content: center; border-radius: 6px; font-weight: 600; font-size: 15px;"
+                            if saldo == 0: c_sem.markdown(f"<div style='{estilo_base} background-color:#F0FDF4; color:#166534; border: 1px solid #BBF7D0;'>Cuadratura Exacta</div>", unsafe_allow_html=True)
+                            elif saldo > 0: c_sem.markdown(f"<div style='{estilo_base} background-color:#FEF2F2; color:#991B1B; border: 1px solid #FECACA;'>Faltan {fmt_clp(saldo)}</div>", unsafe_allow_html=True)
+                            else: c_sem.markdown(f"<div style='{estilo_base} background-color:#FFFBEB; color:#92400E; border: 1px solid #FDE68A;'>Sobran {fmt_clp(abs(saldo))}</div>", unsafe_allow_html=True)
+                            
+                            if permiso_editar and c_btn.button("Guardar", type="primary", use_container_width=True, key="b_ren"):
+                                save_finanzas(f_of, id_vo, {"cc":t_cc, "cc_det":txt_cc, "co":t_co, "ds":ds, "bn":bn, "su":su, "om":t_om, "od":txt_om, "ef":ef, "tr":tr, "pc":pc})
+                                st.success("Guardado"); time.sleep(0.5); st.rerun()
 
         # --- PESTAÑA 3: REPORTE ---
-        with tab_rep:
-            st.write("")
-            st.markdown(f"<h5 style='display:flex; align-items:center;'>{svg_rep} Estado General</h5>", unsafe_allow_html=True)
-            col_r1, col_r2, col_r3 = st.columns([2, 2, 2], vertical_alignment="bottom")
-            fi_e = col_r1.date_input("Desde", date.today() - timedelta(days=7), key="r_ini_e")
-            ff_e = col_r2.date_input("Hasta", date.today(), key="r_fin_e")
-            
-            if col_r3.button("Generar Reporte", type="primary", use_container_width=True, key="btn_rep_e"):
-                df_res = obtener_resumen_global(fi_e, ff_e)
-                if not df_res.empty:
-                    if es_repartidor:
-                        df_res = df_res[df_res['Vendedor'] == v_of]
+        if tab_rep:
+            with tab_rep:
+                st.write("")
+                st.markdown(f"<h5 style='display:flex; align-items:center;'>{svg_rep} Estado General</h5>", unsafe_allow_html=True)
+                
+                col_r1, col_r2, col_r3, col_r4 = st.columns([2, 2, 3, 2], vertical_alignment="bottom")
+                fi_e = col_r1.date_input("Desde", date.today() - timedelta(days=7), key="r_ini_e", format="DD/MM/YYYY")
+                ff_e = col_r2.date_input("Hasta", date.today(), key="r_fin_e", format="DD/MM/YYYY")
+                
+                # --- SELECTOR INTELIGENTE DE AISLAMIENTO ---
+                if not es_repartidor:
+                    filtro_rep_e = col_r3.selectbox("Filtrar Repartidor", ["Todos"] + lista_repartidores_esp, index=0, key="filt_rep_rep_e")
+                else:
+                    filtro_rep_e = col_r3.selectbox("Repartidor", [nombre_vendedor_actual], disabled=True, key="filt_rep_rep_e")
+                
+                if col_r4.button("Generar Reporte", type="primary", use_container_width=True, key="btn_rep_e"):
+                    df_res = obtener_resumen_global(fi_e, ff_e)
                     
                     if not df_res.empty:
-                        df_res = df_res.sort_values(by='Vendedor', ascending=True)
-                        st.dataframe(df_res.style.map(lambda v: 'background-color: #F0FDF4; color: #166534' if v==0 else ('background-color: #FEF2F2; color: #991B1B' if v>0 else 'background-color: #FFFBEB; color: #92400E'), subset=['Saldo']).format({"Total Ingresos": "$ {:,.0f}", "Total Gastos": "$ {:,.0f}", "Deuda Neta": "$ {:,.0f}", "Pagado": "$ {:,.0f}", "Saldo": "$ {:,.0f}"}), hide_index=True, use_container_width=True)
-                        st.write("")
-                        st.metric("Saldo Pendiente Acumulado", fmt_clp(df_res['Saldo'].sum()))
+                        # --- MOTOR DE FILTRADO ---
+                        if es_repartidor:
+                            df_res = df_res[df_res['Vendedor'] == nombre_vendedor_actual]
+                        elif filtro_rep_e != "Todos":
+                            df_res = df_res[df_res['Vendedor'] == filtro_rep_e]
+                            
+                        if not df_res.empty:
+                            # ORDEN CRONOLÓGICO: Más reciente primero
+                            if 'fecha' in df_res.columns.str.lower():
+                                col_fecha = 'Fecha' if 'Fecha' in df_res.columns else 'fecha'
+                                df_res[col_fecha] = pd.to_datetime(df_res[col_fecha], dayfirst=True, errors='ignore')
+                                df_res = df_res.sort_values(by=[col_fecha, 'Vendedor'], ascending=[False, True])
+                                df_res[col_fecha] = df_res[col_fecha].dt.strftime('%d/%m/%Y')
+                            else:
+                                df_res = df_res.sort_values(by='Vendedor', ascending=True)
+                                
+                            st.dataframe(df_res.style.map(lambda v: 'background-color: #F0FDF4; color: #166534' if v==0 else ('background-color: #FEF2F2; color: #991B1B' if v>0 else 'background-color: #FFFBEB; color: #92400E'), subset=['Saldo']).format({"Total Ingresos": "$ {:,.0f}", "Total Gastos": "$ {:,.0f}", "Deuda Neta": "$ {:,.0f}", "Pagado": "$ {:,.0f}", "Saldo": "$ {:,.0f}"}), hide_index=True, use_container_width=True)
+                            st.write("")
+                            st.metric("Saldo Pendiente Acumulado", fmt_clp(df_res['Saldo'].sum()))
+                        else:
+                            st.info("No hay registros para la selección en este rango de fechas.")
                     else:
                         st.info("Sin registros financieros en este período.")
-                else: 
-                    st.info("Vacío.")
-
+                        
     elif seleccion == "Clientes":
         st.title("Clientes")
         
@@ -1770,12 +2069,9 @@ def app_pan_especial():
         svg_inbox = '''<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" fill="#556B2F" class="bi bi-inbox" viewBox="0 0 16 16" style="margin-right: 8px; margin-bottom: 2px;"><path d="M4.98 4a.5.5 0 0 0-.39.188L1.54 8H6a.5.5 0 0 1 .5.5 1.5 1.5 0 1 0 3 0A.5.5 0 0 1 10 8h4.46l-3.05-3.812A.5.5 0 0 0 11.02 4H4.98zm9.954 5H10.45a2.5 2.5 0 0 1-4.9 0H1.066l.32 2.562a.5.5 0 0 0 .497.438h12.234a.5.5 0 0 0 .496-.438L14.933 9zM3.809 3.563A1.5 1.5 0 0 1 4.981 3h6.038a1.5 1.5 0 0 1 1.172.563l3.7 4.625a.5.5 0 0 1 .109.273l.94 7.514A1.5 1.5 0 0 1 15.446 15H.554a1.5 1.5 0 0 1-1.493-1.025l.94-7.514a.5.5 0 0 1 .108-.273l3.7-4.625z"/></svg>'''
 
         es_aprobador = rol in ["admin", "supervisor"]
-        
         tab_dir, tab_sug = st.tabs(["Directorio", "Sugerencias"])
-        
         df_base = obtener_clientes_df()
 
-        # --- PESTAÑA 1: EL DIRECTORIO ---
         with tab_dir:
             st.write("")
             c_head, c_tog = st.columns([3, 1], vertical_alignment="bottom")
@@ -1864,11 +2160,10 @@ def app_pan_especial():
                             "Repartidor": st.column_config.TextColumn("Repartidor", width="medium"), 
                             "tipo_cliente": "Tipo", 
                             "limite_credito": st.column_config.NumberColumn("Cupo", format="$ %d"),
-                            "permite_credito": st.column_config.CheckboxColumn("Crédito")
+                            "permite_credito": st.column_config.CheckboxColumn("¿Crédito?")
                         }
                     )
                     
-                # Formulario de Edición
                 if len(event.selection.rows) > 0:
                     row = df_show.iloc[event.selection.rows[0]]
                     st.divider()
@@ -1888,7 +2183,6 @@ def app_pan_especial():
                         
                         e_cred = False
                         if permiso_editar:
-                            # Se evalúa el campo de la base de datos para pre-marcarlo o no
                             estado_credito_actual = bool(row.get('permite_credito', False))
                             e_cred = st.toggle("Habilitar línea de crédito", value=estado_credito_actual)
                         
@@ -1909,7 +2203,6 @@ def app_pan_especial():
                             else:
                                 st.error("Debe seleccionar un repartidor válido.")
 
-        # --- PESTAÑA 2: LA BANDEJA DE SUGERENCIAS ---
         with tab_sug:
             st.write("")
             st.markdown(f"<h5 style='display:flex; align-items:center;'>{svg_inbox} Bandeja de Aprobación</h5>", unsafe_allow_html=True)
@@ -1925,24 +2218,19 @@ def app_pan_especial():
                     if len(ev_sug.selection.rows) > 0:
                         s_row = df_sug.iloc[ev_sug.selection.rows[0]]
                         st.divider()
-                        
                         tipo_txt = "nuevo cliente" if s_row['tipo_solicitud'] == 'NUEVO' else "edición de cliente"
-                        
                         st.markdown(f"**Evaluar {tipo_txt}** | Propuesto por: {s_row['Repartidor']}")
                         st.info(f"Justificación: {s_row['comentario']}")
                         
                         ca, cr = st.columns(2)
-                        
                         if ca.button("Aprobar e integrar", type="primary", use_container_width=True):
                             crud_sugerencia("APROBADA", s_row.to_dict(), id_sug=int(s_row['id']))
                             st.success("Integrado."); time.sleep(0.5); st.rerun()
-                            
                         if cr.button("Rechazar", use_container_width=True):
                             crud_sugerencia("RECHAZADA", id_sug=int(s_row['id']))
                             st.error("Rechazado."); time.sleep(0.5); st.rerun()
                 else:
                     st.success("Bandeja limpia.")
-            
             else:
                 df_mis_sug = get_sugerencias(solo_pendientes=False, id_vend=mi_id_vendedor)
                 if not df_mis_sug.empty:
@@ -1951,7 +2239,6 @@ def app_pan_especial():
                         if val == 'APROBADA': return 'color: #166534; font-weight: bold'  
                         if val == 'RECHAZADA': return 'color: #991B1B; font-weight: bold' 
                         return ''
-                        
                     st.dataframe(
                         df_mis_sug.style.map(color_sug, subset=['estado']),
                         use_container_width=True, hide_index=True,
@@ -1965,65 +2252,173 @@ def app_pan_especial():
         
         svg_credit = '''<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" fill="#556B2F" class="bi bi-credit-card" viewBox="0 0 16 16" style="margin-right: 8px; margin-bottom: 2px;"><path d="M0 4a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H2a2 2 0 0 1-2-2V4zm2-1a1 1 0 0 0-1 1v1h14V4a1 1 0 0 0-1-1H2zm13 4H1v5a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V7z"/><path d="M2 10a1 1 0 0 1 1-1h1a1 1 0 0 1 1 1v1a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1v-1z"/></svg>'''
         svg_list = '''<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" fill="#556B2F" class="bi bi-card-list" viewBox="0 0 16 16" style="margin-right: 8px; margin-bottom: 2px;"><path d="M14.5 3a.5.5 0 0 1 .5.5v9a.5.5 0 0 1-.5.5h-13a.5.5 0 0 1-.5-.5v-9a.5.5 0 0 1 .5-.5h13zm-13-1A1.5 1.5 0 0 0 0 3.5v9A1.5 1.5 0 0 0 1.5 14h13a1.5 1.5 0 0 0 1.5-1.5v-9A1.5 1.5 0 0 0 14.5 2h-13z"/><path d="M5 8a.5.5 0 0 1 .5-.5h7a.5.5 0 0 1 0 1h-7A.5.5 0 0 1 5 8zm0-2.5a.5.5 0 0 1 .5-.5h7a.5.5 0 0 1 0 1h-7a.5.5 0 0 1-.5-.5zm0 5a.5.5 0 0 1 .5-.5h7a.5.5 0 0 1 0 1h-7a.5.5 0 0 1-.5-.5zm-1-5a.5.5 0 1 1-1 0 .5.5 0 0 1 1 0zM4 8a.5.5 0 1 1-1 0 .5.5 0 0 1 1 0zm0 2.5a.5.5 0 1 1-1 0 .5.5 0 0 1 1 0z"/></svg>'''
+        svg_hist = '''<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" fill="#556B2F" class="bi bi-clock-history" viewBox="0 0 16 16" style="margin-right: 8px; margin-bottom: 2px;"><path d="M8.515 1.019A7 7 0 0 0 8 1V0a8 8 0 0 1 .589.022zm2.004.45a7 7 0 0 0-.985-.299l.219-.976q.576.129 1.126.342zm1.37.71a7 7 0 0 0-.439-.27l.493-.87a8 8 0 0 1 .979.654l-.615.789a7 7 0 0 0-.418-.302zm1.834 1.79a7 7 0 0 0-.653-.796l.724-.69q.406.429.747.91zm.744 1.352a7 7 0 0 0-.214-.468l.893-.45a8 8 0 0 1 .45 1.088l-.95.313a7 7 0 0 0-.179-.483m.53 2.507a7 7 0 0 0-.1-1.025l.985-.17q.1.58.116 1.17zm-.131 1.538q.05-.254.081-.51l.993.123a8 8 0 0 1-.23 1.155l-.964-.267q.069-.247.12-.501m-.952 2.379q.276-.436.486-.908l.914.405q-.24.54-.555 1.038zm-.964 1.205q.183-.183.35-.378l.758.653a8 8 0 0 1-.401.432z"/><path d="M8 1a7 7 0 1 0 4.95 11.95l.707.707A8.001 8.001 0 1 1 8 0z"/><path d="M7.5 3a.5.5 0 0 1 .5.5v5.21l3.248 1.856a.5.5 0 0 1-.496.868l-3.5-2A.5.5 0 0 1 7 9V3.5a.5.5 0 0 1 .5-.5"/></svg>'''
 
-        tabs_creditos = st.tabs(["Operaciones", "Cartera"]) if not es_repartidor else st.tabs(["Cartera"])
+        es_jefatura = rol in ["admin", "supervisor"]
         
+        # --- MUTACIÓN: 3 Pestañas para Admin, 2 para Repartidores ---
+        tabs_creditos = st.tabs(["Operaciones", "Movimientos", "Cartera"]) if not es_repartidor else st.tabs(["Movimientos", "Cartera"])
+        
+        idx_def_cred = lista_repartidores_esp_puro.index(nombre_vendedor_actual) if es_repartidor and nombre_vendedor_actual in lista_repartidores_esp_puro else None
+
         if not es_repartidor:
-            with tabs_creditos[0]:
+            t_op, t_mov, t_car = tabs_creditos[0], tabs_creditos[1], tabs_creditos[2]
+        else:
+            t_op, t_mov, t_car = None, tabs_creditos[0], tabs_creditos[1]
+
+        if t_op:
+            with t_op:
                 st.write("")
                 df_clientes = obtener_clientes_df()
                 
-                with st.container(border=True):
-                    st.markdown(f"<h5 style='display:flex; align-items:center;'>{svg_credit} Nueva Operación</h5>", unsafe_allow_html=True)
-                    f_mov = st.date_input("Fecha", date.today())
-                    
-                    c_op1, c_op2 = st.columns(2)
-                    vend_sel = c_op1.selectbox("Repartidor", lista_repartidores_todos, index=idx_defecto, placeholder="Seleccione un repartidor...", key="rep_op_cred")
-                    
-                    if vend_sel:
-                        if not df_clientes.empty:
-                            df_clientes['permite_credito'] = df_clientes['permite_credito'].fillna(False).astype(bool)
-                            df_cli_filt = df_clientes[(df_clientes['Repartidor'] == vend_sel) & (df_clientes['permite_credito'])]
-                        else:
-                            df_cli_filt = pd.DataFrame()
-                        
-                        if not df_cli_filt.empty:
-                            cli_sel = c_op2.selectbox("Cliente", df_cli_filt['nombre'], index=None, placeholder="Seleccione un cliente autorizado...")
-                        else:
-                            cli_sel = c_op2.selectbox("Cliente", ["Sin clientes con crédito habilitado"], disabled=True)
-                        
-                        st.write("")
-                        c_opt1, c_opt2, c_opt3 = st.columns([2, 2, 1], vertical_alignment="bottom")
-                        tipo_sel = c_opt1.radio("Tipo de Movimiento", ["Crédito (Fiado)", "Abono (Pago)"], horizontal=True)
-                        monto = c_opt2.number_input("Monto ($)", min_value=0, step=1000)
-                        
-                        if c_opt3.button("Guardar", type="primary", use_container_width=True):
-                            if cli_sel and cli_sel != "Sin clientes con crédito habilitado":
-                                id_cli = int(df_cli_filt[df_cli_filt['nombre']==cli_sel]['id'].values[0])
-                                tipo_db = "CREDITO" if "Crédito" in tipo_sel else "ABONO"
-                                if monto > 0:
-                                    registrar_movimiento_credito(f_mov, id_cli, dict_vend[vend_sel], tipo_db, monto, "Operación App")
-                                    st.success("Registrado"); time.sleep(0.5); st.rerun()
-                                else: 
-                                    st.error("Monto inválido")
-                            else:
-                                st.warning("Debe seleccionar un cliente válido y autorizado para crédito.")
-                    else:
-                        c_op2.selectbox("Cliente", ["-"], disabled=True)
+                c_head, c_tog = st.columns([3, 1], vertical_alignment="bottom")
+                c_head.markdown(f"<h5 style='display:flex; align-items:center; margin-bottom: 0;'>{svg_credit} Operaciones</h5>", unsafe_allow_html=True)
+                
+                modo_correccion = False
+                if permiso_editar:
+                    modo_correccion = c_tog.toggle("Corregir operación")
 
-        idx_tab_rep = 1 if not es_repartidor else 0
-        with tabs_creditos[idx_tab_rep]:
+                with st.container(border=True):
+                    if modo_correccion:
+                        df_editables = obtener_creditos_editables(es_jefatura)
+                        
+                        if not df_editables.empty:
+                            st.info("Mostrando registros editables según su nivel de credencial (Candado Temporal).")
+                            
+                            opciones_edicion = {}
+                            for _, r in df_editables.iterrows():
+                                fecha_str = r['fecha'].strftime("%d/%m/%Y")
+                                tipo_visual = "Fiado" if r['tipo_movimiento'] == "CREDITO" else "Abono"
+                                eq = f"{fecha_str} | {r['Repartidor']} -> {r['Cliente']} | $ {int(r['monto'])} | {tipo_visual}"
+                                opciones_edicion[eq] = r
+                                
+                            sel_reg = st.selectbox("Seleccione la operación a corregir", list(opciones_edicion.keys()), index=None, placeholder="Buscar registro...")
+                            
+                            if sel_reg:
+                                row_ed = opciones_edicion[sel_reg]
+                                st.divider()
+                                
+                                f_mov = st.date_input("Fecha", row_ed['fecha'], format="DD/MM/YYYY", key="ed_f_mov")
+                                
+                                c_op1, c_op2 = st.columns(2)
+                                idx_rep_ed = lista_repartidores_esp_puro.index(row_ed['Repartidor']) if row_ed['Repartidor'] in lista_repartidores_esp_puro else 0
+                                vend_sel = c_op1.selectbox("Repartidor", lista_repartidores_esp_puro, index=idx_rep_ed, key="ed_vend")
+                                
+                                if not df_clientes.empty:
+                                    df_clientes['permite_credito'] = df_clientes['permite_credito'].fillna(False).astype(bool)
+                                    df_cli_filt = df_clientes[(df_clientes['Repartidor'] == vend_sel) & (df_clientes['permite_credito'])]
+                                else:
+                                    df_cli_filt = pd.DataFrame()
+                                    
+                                if not df_cli_filt.empty:
+                                    idx_cli = df_cli_filt['nombre'].tolist().index(row_ed['Cliente']) if row_ed['Cliente'] in df_cli_filt['nombre'].tolist() else 0
+                                    cli_sel = c_op2.selectbox("Cliente", df_cli_filt['nombre'], index=idx_cli, key="ed_cli")
+                                else:
+                                    cli_sel = c_op2.selectbox("Cliente", ["Sin clientes con crédito habilitado"], disabled=True, key="ed_cli_null")
+                                    
+                                st.write("")
+                                c_opt1, c_opt2, c_opt3 = st.columns([2, 2, 1], vertical_alignment="bottom")
+                                idx_tipo = 0 if row_ed['tipo_movimiento'] == 'CREDITO' else 1
+                                tipo_sel = c_opt1.radio("Tipo de Movimiento", ["Crédito (Fiado)", "Abono (Pago)"], index=idx_tipo, horizontal=True, key="ed_tipo")
+                                monto = c_opt2.number_input("Monto ($)", min_value=0, value=int(row_ed['monto']), step=1000, key="ed_monto")
+                                
+                                st.write("")
+                                c_btn, _ = st.columns([1, 4])
+                                if c_btn.button("Actualizar Registro", type="primary", use_container_width=True, key="ed_btn_save"):
+                                    if cli_sel and cli_sel != "Sin clientes con crédito habilitado" and monto > 0:
+                                        id_cli = int(df_cli_filt[df_cli_filt['nombre']==cli_sel]['id'].values[0])
+                                        tipo_db = "CREDITO" if "Crédito" in tipo_sel else "ABONO"
+                                        editar_movimiento_credito(row_ed['id'], f_mov, id_cli, dict_vend[vend_sel], tipo_db, monto, "Operación App (Editada)", st.session_state.user_name)
+                                        st.success("Registro corregido."); time.sleep(0.5); st.rerun()
+                                    else:
+                                        st.error("Campos inválidos.")
+                        else:
+                            st.warning("No hay registros recientes habilitados para su edición.")
+
+                    else:
+                        f_mov = st.date_input("Fecha", date.today(), format="DD/MM/YYYY")
+                        
+                        c_op1, c_op2 = st.columns(2)
+                        vend_sel = c_op1.selectbox("Repartidor", lista_repartidores_esp_puro, index=idx_def_cred, placeholder="Seleccione un repartidor...", key="rep_op_cred")
+                        
+                        if vend_sel:
+                            if not df_clientes.empty:
+                                df_clientes['permite_credito'] = df_clientes['permite_credito'].fillna(False).astype(bool)
+                                df_cli_filt = df_clientes[(df_clientes['Repartidor'] == vend_sel) & (df_clientes['permite_credito'])]
+                            else:
+                                df_cli_filt = pd.DataFrame()
+                            
+                            if not df_cli_filt.empty:
+                                cli_sel = c_op2.selectbox("Cliente", df_cli_filt['nombre'], index=None, placeholder="Seleccione un cliente autorizado...")
+                            else:
+                                cli_sel = c_op2.selectbox("Cliente", ["Sin clientes con crédito habilitado"], disabled=True)
+                            
+                            st.write("")
+                            c_opt1, c_opt2, c_opt3 = st.columns([2, 2, 1], vertical_alignment="bottom")
+                            tipo_sel = c_opt1.radio("Tipo de Movimiento", ["Crédito (Fiado)", "Abono (Pago)"], horizontal=True)
+                            monto = c_opt2.number_input("Monto ($)", min_value=0, value=None, step=1000, placeholder="Vacío")
+                            
+                            st.write("")
+                            c_btn, _ = st.columns([1, 4])
+                            if c_btn.button("Guardar", type="primary", use_container_width=True):
+                                if cli_sel and cli_sel != "Sin clientes con crédito habilitado":
+                                    id_cli = int(df_cli_filt[df_cli_filt['nombre']==cli_sel]['id'].values[0])
+                                    tipo_db = "CREDITO" if "Crédito" in tipo_sel else "ABONO"
+                                    if monto and monto > 0:
+                                        registrar_movimiento_credito(f_mov, id_cli, dict_vend[vend_sel], tipo_db, monto, "Operación App", st.session_state.user_name)
+                                        st.success("Registrado"); time.sleep(0.5); st.rerun()
+                                    else: 
+                                        st.error("Monto inválido")
+                                else:
+                                    st.warning("Debe seleccionar un cliente válido y autorizado para crédito.")
+                        else:
+                            c_op2.selectbox("Cliente", ["-"], disabled=True)
+
+        # --- NUEVA PESTAÑA: MOVIMIENTOS ---
+        with t_mov:
+            st.write("")
+            st.markdown(f"<h5 style='display:flex; align-items:center;'>{svg_hist} Historial de Transacciones</h5>", unsafe_allow_html=True)
+            c_m1, c_m2, c_m3, c_m4 = st.columns([2, 2, 3, 2], vertical_alignment="bottom")
+            
+            fm_ini = c_m1.date_input("Desde", date.today() - timedelta(days=7), format="DD/MM/YYYY", key="fm_ini_cred")
+            fm_fin = c_m2.date_input("Hasta", date.today(), format="DD/MM/YYYY", key="fm_fin_cred")
+            
+            if es_repartidor:
+                v_mov = c_m3.selectbox("Repartidor", [nombre_vendedor_actual], disabled=True, key="sel_mov_rep_dis")
+            else:
+                v_mov = c_m3.selectbox("Repartidor", ["Todos"] + lista_repartidores_esp_puro, index=0, key="sel_mov_rep")
+                
+            if c_m4.button("Consultar", type="primary", use_container_width=True, key="btn_mov_cred"):
+                id_v_filtro = dict_vend[v_mov] if v_mov != "Todos" and v_mov in dict_vend else None
+                df_movs = obtener_historial_movimientos_credito(fm_ini, fm_fin, id_v_filtro)
+                
+                if not df_movs.empty:
+                    st.write("")
+                    def color_tipo(val):
+                        if val == 'CREDITO': return 'color: #991B1B; font-weight: bold' # Rojo fiado
+                        elif val == 'ABONO': return 'color: #166534; font-weight: bold' # Verde abono
+                        return ''
+                    
+                    st.dataframe(
+                        df_movs.style.map(color_tipo, subset=['Tipo']).format({"Monto": "$ {:,.0f}"}), 
+                        use_container_width=True, 
+                        hide_index=True
+                    )
+                else:
+                    st.info("Sin registros en este período.")
+
+        # --- PESTAÑA ORIGINAL: CARTERA DE ESTADO DE DEUDAS ---
+        with t_car:
             st.write("")
             st.markdown(f"<h5 style='display:flex; align-items:center;'>{svg_list} Estado de Deudas</h5>", unsafe_allow_html=True)
             
             cr1, cr2, cr3 = st.columns([1, 2, 1], vertical_alignment="bottom")
-            f_rep = cr1.date_input("Fecha de Corte", date.today())
+            f_rep = cr1.date_input("Fecha de Corte", date.today(), format="DD/MM/YYYY")
             
-            v_rep = cr2.selectbox("Filtrar por Repartidor", lista_repartidores_todos, index=idx_defecto, placeholder="Seleccione repartidor...", disabled=es_repartidor, key="sel_rep_cred_rep")
+            v_rep = cr2.selectbox("Filtrar por Repartidor", lista_repartidores_esp_puro, index=idx_def_cred, placeholder="Seleccione repartidor...", disabled=es_repartidor, key="sel_rep_cred_rep")
             
             if cr3.button("Consultar", type="primary", use_container_width=True):
                 if v_rep:
-                    # Inyección de la Fecha de Corte en la función SQL
                     df_estado = obtener_estado_creditos_vendedor(dict_vend[v_rep], f_rep)
                     
                     if not df_estado.empty:
@@ -2066,14 +2461,17 @@ def app_pan_especial():
         svg_check = '''<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" fill="#556B2F" class="bi bi-check2-square" viewBox="0 0 16 16" style="margin-right: 8px; margin-bottom: 2px;"><path d="M3 14.5A1.5 1.5 0 0 1 1.5 13V3A1.5 1.5 0 0 1 3 1.5h8a.5.5 0 0 1 0 1H3a.5.5 0 0 0-.5.5v10a.5.5 0 0 0 .5.5h10a.5.5 0 0 0 .5-.5V8a.5.5 0 0 1 1 0v5a1.5 1.5 0 0 1-1.5 1.5z"/><path d="m8.354 10.354 7-7a.5.5 0 0 0-.708-.708L8 9.293 5.354 6.646a.5.5 0 1 0-.708.708l3 3a.5.5 0 0 0 .708 0z"/></svg>'''
         svg_hist = '''<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" fill="#556B2F" class="bi bi-clock-history" viewBox="0 0 16 16" style="margin-right: 8px; margin-bottom: 2px;"><path d="M8.515 1.019A7 7 0 0 0 8 1V0a8 8 0 0 1 .589.022zm2.004.45a7 7 0 0 0-.985-.299l.219-.976q.576.129 1.126.342zm1.37.71a7 7 0 0 0-.439-.27l.493-.87a8 8 0 0 1 .979.654l-.615.789a7 7 0 0 0-.418-.302zm1.834 1.79a7 7 0 0 0-.653-.796l.724-.69q.406.429.747.91zm.744 1.352a7 7 0 0 0-.214-.468l.893-.45a8 8 0 0 1 .45 1.088l-.95.313a7 7 0 0 0-.179-.483m.53 2.507a7 7 0 0 0-.1-1.025l.985-.17q.1.58.116 1.17zm-.131 1.538q.05-.254.081-.51l.993.123a8 8 0 0 1-.23 1.155l-.964-.267q.069-.247.12-.501m-.952 2.379q.276-.436.486-.908l.914.405q-.24.54-.555 1.038zm-.964 1.205q.183-.183.35-.378l.758.653a8 8 0 0 1-.401.432z"/><path d="M8 1a7 7 0 1 0 4.95 11.95l.707.707A8.001 8.001 0 1 1 8 0z"/><path d="M7.5 3a.5.5 0 0 1 .5.5v5.21l3.248 1.856a.5.5 0 0 1-.496.868l-3.5-2A.5.5 0 0 1 7 9V3.5a.5.5 0 0 1 .5-.5"/></svg>'''
 
+        es_jefatura = rol in ["admin", "supervisor"]
+        idx_def_tr = lista_repartidores_esp_puro.index(nombre_vendedor_actual) if es_repartidor and nombre_vendedor_actual in lista_repartidores_esp_puro else None
+
         if es_repartidor:
             st.write("")
             st.markdown(f"<h5 style='display:flex; align-items:center;'>{svg_hist} Historial</h5>", unsafe_allow_html=True)
             c_r1, c_r2, c_r3, c_r4 = st.columns([2, 2, 3, 2], vertical_alignment="bottom")
-            fr_ini = c_r1.date_input("Desde", date.today() - timedelta(days=7))
-            fr_fin = c_r2.date_input("Hasta", date.today())
+            fr_ini = c_r1.date_input("Desde", date.today() - timedelta(days=7), format="DD/MM/YYYY")
+            fr_fin = c_r2.date_input("Hasta", date.today(), format="DD/MM/YYYY")
             
-            v_rep_tr = c_r3.selectbox("Repartidor", lista_repartidores_todos, index=idx_defecto, disabled=True, key="sel_rep_trans_rep_view")
+            v_rep_tr = c_r3.selectbox("Repartidor", lista_repartidores_esp_puro, index=idx_def_tr, disabled=True, key="sel_rep_trans_rep_view")
             
             if c_r4.button("Consultar", type="primary", use_container_width=True):
                 id_v_tr = dict_vend[v_rep_tr]
@@ -2085,46 +2483,97 @@ def app_pan_especial():
                     st.info("Sin registros en esta fecha.")
                 
         else:
-            tabs_tr = st.tabs(["Nuevo Registro", "Conciliación", "Historial"])
+            tabs_tr = st.tabs(["Operaciones", "Conciliación", "Historial"])
             
-            # --- PESTAÑA 1: NUEVO REGISTRO ---
             with tabs_tr[0]:
                 st.write("")
-                with st.container(border=True):
-                    st.markdown(f"<h5 style='display:flex; align-items:center;'>{svg_bank} Ingresar Operación</h5>", unsafe_allow_html=True)
-                    with st.form("new_transf", border=False, clear_on_submit=True):
-                        t1, t2, t3 = st.columns([1, 2, 1])
-                        ft = t1.date_input("Fecha", date.today())
-                        rt = t2.selectbox("Repartidor", lista_repartidores_todos, index=None, placeholder="Seleccione un repartidor...", key="rep_tr")
-                        mt = t3.number_input("Monto ($)", min_value=0, step=1000)
-                        
-                        t4, t5, t6, t7 = st.columns([1, 1, 1, 1])
-                        tt = t4.selectbox("Concepto", ["Pago Diario", "Abono Crédito"])
-                        met = t5.selectbox("Método", ["Transferencia", "Depósito"])
-                        b_dest = t6.selectbox("Cta. Destino", ["Banco Estado", "Banco Chile"])
-                        b_orig = t7.selectbox("Banco Origen", l_bancos)
-                        
-                        st.write("")
-                        if st.form_submit_button("Guardar Registro", type="primary"):
-                            if rt and mt > 0:
-                                registrar_transferencia(ft, dict_vend[rt], mt, f"{met} a {b_dest}", b_orig, tt, False, "")
-                                st.success("Guardado"); time.sleep(0.5); st.rerun()
-                            else: 
-                                st.error("Debe seleccionar un repartidor e ingresar un monto mayor a 0.")
+                c_head, c_tog = st.columns([3, 1], vertical_alignment="bottom")
+                c_head.markdown(f"<h5 style='display:flex; align-items:center; margin-bottom: 0;'>{svg_bank} Registro de Pagos</h5>", unsafe_allow_html=True)
+                
+                modo_correccion = False
+                if permiso_editar:
+                    modo_correccion = c_tog.toggle("Corregir un registro")
 
-            # --- PESTAÑA 2: CONCILIACIÓN ---
+                with st.container(border=True):
+                    if modo_correccion:
+                        df_editables = obtener_transferencias_editables(es_jefatura)
+                        
+                        if not df_editables.empty:
+                            st.info("Mostrando registros editables según su nivel de credencial (Candado Temporal).")
+                            
+                            opciones_edicion = {}
+                            for _, r in df_editables.iterrows():
+                                fecha_str = r['fecha'].strftime("%d/%m/%Y")
+                                eq = f"{fecha_str} | {r['Repartidor']} | $ {int(r['monto'])} | {r['tipo_transferencia']}"
+                                opciones_edicion[eq] = r
+                                
+                            sel_reg = st.selectbox("Seleccione el registro a corregir", list(opciones_edicion.keys()), index=None, placeholder="Buscar registro...")
+                            
+                            if sel_reg:
+                                row_ed = opciones_edicion[sel_reg]
+                                st.divider()
+                                
+                                with st.form("edit_transf", border=False):
+                                    t1, t2, t3 = st.columns([1, 2, 1])
+                                    ft = t1.date_input("Fecha", row_ed['fecha'], format="DD/MM/YYYY")
+                                    idx_rep_ed = lista_repartidores_esp_puro.index(row_ed['Repartidor']) if row_ed['Repartidor'] in lista_repartidores_esp_puro else 0
+                                    rt = t2.selectbox("Repartidor", lista_repartidores_esp_puro, index=idx_rep_ed)
+                                    mt = t3.number_input("Monto ($)", min_value=0, value=int(row_ed['monto']), step=1000)
+                                    
+                                    t4, t5, t6, t7 = st.columns([1, 1, 1, 1])
+                                    idx_tipo = ["Pago Diario", "Abono Crédito"].index(row_ed['tipo_transferencia']) if row_ed['tipo_transferencia'] in ["Pago Diario", "Abono Crédito"] else 0
+                                    tt = t4.selectbox("Concepto", ["Pago Diario", "Abono Crédito"], index=idx_tipo)
+                                    
+                                    met_actual = "Depósito" if "Depósito" in str(row_ed['metodo_pago']) else "Transferencia"
+                                    dest_actual = "Banco Chile" if "Chile" in str(row_ed['metodo_pago']) else "Banco Estado"
+                                    
+                                    met = t5.selectbox("Método", ["Transferencia", "Depósito"], index=["Transferencia", "Depósito"].index(met_actual))
+                                    b_dest = t6.selectbox("Cta. Destino", ["Banco Estado", "Banco Chile"], index=["Banco Estado", "Banco Chile"].index(dest_actual))
+                                    
+                                    idx_orig = l_bancos.index(row_ed['banco_emisor']) if row_ed['banco_emisor'] in l_bancos else 0
+                                    b_orig = t7.selectbox("Banco Origen", l_bancos, index=idx_orig)
+                                    
+                                    st.write("")
+                                    c_btn, _ = st.columns([1, 4])
+                                    if c_btn.form_submit_button("Actualizar Registro", type="primary", use_container_width=True):
+                                        if rt and mt > 0:
+                                            editar_transferencia(row_ed['id'], ft, dict_vend[rt], mt, f"{met} a {b_dest}", b_orig, tt, st.session_state.user_name)
+                                            st.success("Registro corregido."); time.sleep(0.5); st.rerun()
+                                        else:
+                                            st.error("Campos inválidos.")
+                        else:
+                            st.warning("No hay registros recientes habilitados para su edición.")
+
+                    else:
+                        with st.form("new_transf", border=False, clear_on_submit=True):
+                            t1, t2, t3 = st.columns([1, 2, 1])
+                            ft = t1.date_input("Fecha", date.today(), format="DD/MM/YYYY")
+                            rt = t2.selectbox("Repartidor", lista_repartidores_esp_puro, index=None, placeholder="Seleccione un repartidor...", key="rep_tr")
+                            mt = t3.number_input("Monto ($)", min_value=0, value=None, step=1000, placeholder="Vacío")
+                            
+                            t4, t5, t6, t7 = st.columns([1, 1, 1, 1])
+                            tt = t4.selectbox("Concepto", ["Pago Diario", "Abono Crédito"])
+                            met = t5.selectbox("Método", ["Transferencia", "Depósito"])
+                            b_dest = t6.selectbox("Cta. Destino", ["Banco Estado", "Banco Chile"])
+                            b_orig = t7.selectbox("Banco Origen", l_bancos)
+                            
+                            st.write("")
+                            c_btn, _ = st.columns([1, 4])
+                            if c_btn.form_submit_button("Guardar Registro", type="primary", use_container_width=True):
+                                if rt and mt and mt > 0:
+                                    registrar_transferencia(ft, dict_vend[rt], mt, f"{met} a {b_dest}", b_orig, tt, False, "", st.session_state.user_name)
+                                    st.success("Guardado"); time.sleep(0.5); st.rerun()
+                                else: 
+                                    st.error("Debe seleccionar un repartidor e ingresar un monto mayor a 0.")
+
             with tabs_tr[1]:
                 st.write("")
                 st.markdown(f"<h5 style='display:flex; align-items:center;'>{svg_check} Validación de Pagos</h5>", unsafe_allow_html=True)
-                
                 df_p = obtener_transferencias_recientes()
-                
                 if not df_p.empty:
                     df_p['verificado'] = df_p['verificado'].astype(bool)
-                    
                     cols_tr = {
-                        "id": None, 
-                        "fecha": st.column_config.TextColumn("Fecha", disabled=True, width="small"),
+                        "id": None, "fecha": st.column_config.TextColumn("Fecha", disabled=True, width="small"),
                         "Repartidor": st.column_config.TextColumn("Repartidor", disabled=True, width="medium"),
                         "monto": st.column_config.NumberColumn("Monto", format="$ %d", disabled=True, width="small"),
                         "banco_emisor": st.column_config.TextColumn("Banco Emisor", disabled=True, width="medium"),
@@ -2132,25 +2581,28 @@ def app_pan_especial():
                         "verificado": st.column_config.CheckboxColumn("Recibido")
                     }
                     
-                    df_ed = st.data_editor(df_p, key="ed_tr", use_container_width=True, hide_index=True, column_config=cols_tr, disabled=not permiso_editar)
+                    def estilizar_transf(row):
+                        return ['background-color: #FFFFFF; font-weight: 600; color: #1F2937;' if c == 'verificado' else 'background-color: #F8F9FA; color: #6C757D;' for c in row.index]
+                        
+                    df_styled_p = df_p.style.apply(estilizar_transf, axis=1)
+
+                    df_ed = st.data_editor(df_styled_p, key="ed_tr", use_container_width=True, hide_index=True, column_config=cols_tr, disabled=not permiso_editar)
                     
                     st.write("")
-                    c_btn1, c_btn2, c_btn3 = st.columns([1, 2, 1])
-                    if permiso_editar and c_btn2.button("Guardar Cambios", type="primary", use_container_width=True):
+                    c_btn, _ = st.columns([1, 4])
+                    if permiso_editar and c_btn.button("Guardar Cambios", type="primary", use_container_width=True):
                         actualizar_verificacion_masiva(df_ed)
                         st.success("Actualizado"); time.sleep(0.5); st.rerun()
                 else: 
                     st.info("Sin registros recientes.")
 
-            # --- PESTAÑA 3: HISTORIAL ---
             with tabs_tr[2]:
                 st.write("")
                 st.markdown(f"<h5 style='display:flex; align-items:center;'>{svg_hist} Consulta</h5>", unsafe_allow_html=True)
-                
                 tr1, tr2, tr3, tr4 = st.columns([2, 2, 3, 2], vertical_alignment="bottom")
-                fr_ini = tr1.date_input("Desde", date.today() - timedelta(days=7), key="tr_d_ini")
-                fr_fin = tr2.date_input("Hasta", date.today(), key="tr_d_fin")
-                vr = tr3.selectbox("Repartidor", lista_repartidores_todos, index=None, placeholder="Seleccione un repartidor...", key="rep_tr_rep")
+                fr_ini = tr1.date_input("Desde", date.today() - timedelta(days=7), key="tr_d_ini", format="DD/MM/YYYY")
+                fr_fin = tr2.date_input("Hasta", date.today(), key="tr_d_fin", format="DD/MM/YYYY")
+                vr = tr3.selectbox("Repartidor", lista_repartidores_esp_puro, index=None, placeholder="Seleccione un repartidor...", key="rep_tr_rep")
                 
                 if tr4.button("Consultar", type="primary", use_container_width=True, key="btn_hist_tr"):
                     if vr:
@@ -2173,7 +2625,7 @@ def app_pan_especial():
         es_jefatura = rol in ["admin", "supervisor"]
         
         c_f1, _ = st.columns([1, 4])
-        fecha_caja = c_f1.date_input("Fecha", date.today(), key="f_caja")
+        fecha_caja = c_f1.date_input("Fecha", date.today(), key="f_caja", format="DD/MM/YYYY")
             
         tabs_caja = st.tabs(["Operación", "Registro", "Ajustes"]) if not es_repartidor else st.tabs(["Consulta"])
         
@@ -2181,66 +2633,174 @@ def app_pan_especial():
         with tabs_caja[0]:
             if permiso_editar:
                 st.write("")
+                
+                # El interruptor estético
+                c_head, c_tog = st.columns([3, 1], vertical_alignment="bottom")
+                c_head.markdown(f"<h5 style='display:flex; align-items:center; margin-bottom: 0;'>{svg_cash} Movimientos de Caja</h5>", unsafe_allow_html=True)
+                
+                modo_correccion = c_tog.toggle("Corregir un registro")
+                
+                df_cat = obtener_categorias_caja()
+                df_entidades = obtener_entidades_caja("Especial")
+
                 with st.container(border=True):
-                    st.markdown(f"<h5 style='display:flex; align-items:center;'>{svg_cash} Nuevo Movimiento</h5>", unsafe_allow_html=True)
-                    
-                    df_cat = obtener_categorias_caja()
-                    df_entidades = obtener_entidades_caja("Especial")
-                    
-                    c1, c2 = st.columns(2)
-                    lista_cat = df_cat['nombre'].tolist() if not df_cat.empty else ["-"]
-                    cat_sel = c1.selectbox("Categoría", lista_cat, index=None, placeholder="Seleccione una categoría...", key="sel_cat")
-                    
-                    if cat_sel:
-                        id_cat = int(df_cat[df_cat['nombre'] == cat_sel]['id'].values[0])
-                        df_sub = obtener_subcategorias_caja(id_cat)
-                        lista_sub = df_sub['nombre'].tolist() if not df_sub.empty else ["-"]
-                        sub_sel = c2.selectbox("Subcategoría", lista_sub, index=None, placeholder="Seleccione una subcategoría...", key="sel_subcat")
+                    # ESTADO 1: FORMULARIO DE CORRECCIÓN
+                    if modo_correccion:
+                        df_editables = obtener_caja_editables("Pan Especial", es_jefatura)
                         
-                        c3, c4 = st.columns(2)
-                        lista_ent = df_entidades['nombre'].tolist() if not df_entidades.empty else ["-"]
-                        ent_sel = c3.selectbox("Entidad", lista_ent, index=None, placeholder="Buscar entidad...", key="sel_ent")
-                        det = c4.text_input("Descripción", placeholder="Ej: Pago factura, bono extra...", key="txt_det")
-                        
-                        c5, c6, c7 = st.columns(3, vertical_alignment="bottom")
-                        mov_dir = c5.selectbox("Movimiento", ["Ingreso", "Egreso"], key="sel_mov_dir")
-                        mov_met = c6.selectbox("Método", ["Efectivo", "Transferencia", "Cheque", "Depósito", "Otro"], key="sel_mov_met")
-                        monto = c7.number_input("Monto ($)", min_value=0, value=None, step=1000, placeholder="Vacío", key="num_monto_caja")
-                        
-                        st.write("")
-                        col_izq, _ = st.columns([1, 4])
-                        if col_izq.button("Guardar", type="primary", use_container_width=True):
-                            if sub_sel and ent_sel and monto and monto > 0:
-                                id_sub_val = int(df_sub[df_sub['nombre']==sub_sel]['id'].values[0]) if not df_sub.empty else None
-                                id_ent_val = int(df_entidades[df_entidades['nombre']==ent_sel]['id'].values[0])
+                        if not df_editables.empty:
+                            st.info("Mostrando registros editables (Candado Temporal).")
+                            
+                            opciones_edicion = {}
+                            for _, r in df_editables.iterrows():
+                                fecha_str = r['fecha'].strftime("%d/%m/%Y")
+                                tipo_monto = ""
+                                if r['ingreso_efectivo'] > 0: tipo_monto = f"+ $ {int(r['ingreso_efectivo'])} (Efec)"
+                                elif r['ingreso_transferencia'] > 0: tipo_monto = f"+ $ {int(r['ingreso_transferencia'])} (Trans)"
+                                elif r['egreso'] > 0: tipo_monto = f"- $ {int(r['egreso'])} (Efec)"
+                                elif r['egreso_transferencia'] > 0: tipo_monto = f"- $ {int(r['egreso_transferencia'])} (Trans)"
                                 
-                                ie = it = ee = et = 0
-                                if mov_dir == "Ingreso":
-                                    if mov_met == "Efectivo": ie = monto
-                                    else: it = monto 
-                                else:
-                                    if mov_met == "Efectivo": ee = monto
-                                    else: et = monto 
+                                eq = f"{fecha_str} | {r['descripcion']} | {r['item']} | {tipo_monto}"
+                                opciones_edicion[eq] = r
                                 
-                                guardar_movimiento_caja_mill(fecha_caja, "Pan Especial", id_cat, id_sub_val, id_ent_val, ent_sel, det, ie, it, ee, et)
-                                st.success("Registrado.")
-                                time.sleep(0.5)
-                                st.rerun()
-                            else: 
-                                st.error("Complete todos los campos requeridos (Subcategoría, Entidad y Monto válido).")
+                            sel_reg = st.selectbox("Seleccione movimiento a corregir", list(opciones_edicion.keys()), index=None, placeholder="Buscar registro...")
+                            
+                            if sel_reg:
+                                row_ed = opciones_edicion[sel_reg]
+                                st.divider()
+                                
+                                c1, c2 = st.columns(2)
+                                
+                                idx_cat = df_cat[df_cat['id'] == row_ed['id_categoria']].index[0] if pd.notna(row_ed['id_categoria']) and not df_cat.empty else 0
+                                cat_sel = c1.selectbox("Categoría", df_cat['nombre'].tolist() if not df_cat.empty else ["-"], index=int(idx_cat))
+                                
+                                if cat_sel:
+                                    id_cat = int(df_cat[df_cat['nombre'] == cat_sel]['id'].values[0])
+                                    df_sub = obtener_subcategorias_caja(id_cat)
+                                    lista_sub = df_sub['nombre'].tolist() if not df_sub.empty else ["-"]
+                                    
+                                    idx_sub = 0
+                                    if pd.notna(row_ed['id_subcategoria']) and not df_sub.empty:
+                                        match_sub = df_sub[df_sub['id'] == row_ed['id_subcategoria']]
+                                        if not match_sub.empty: idx_sub = match_sub.index[0]
+                                        
+                                    sub_sel = c2.selectbox("Subcategoría", lista_sub, index=int(idx_sub))
+                                    
+                                    c3, c4 = st.columns(2)
+                                    lista_ent = df_entidades['nombre'].tolist() if not df_entidades.empty else ["-"]
+                                    
+                                    idx_ent = 0
+                                    if pd.notna(row_ed['id_entidad']) and not df_entidades.empty:
+                                        match_ent = df_entidades[df_entidades['id'] == row_ed['id_entidad']]
+                                        if not match_ent.empty: idx_ent = match_ent.index[0]
+                                        
+                                    ent_sel = c3.selectbox("Entidad", lista_ent, index=int(idx_ent))
+                                    det = c4.text_input("Descripción", value=str(row_ed['item']) if pd.notna(row_ed['item']) else "")
+                                    
+                                    c5, c6, c7 = st.columns(3, vertical_alignment="bottom")
+                                    
+                                    es_ingreso = (row_ed['ingreso_efectivo'] > 0) or (row_ed['ingreso_transferencia'] > 0)
+                                    mov_dir_idx = 0 if es_ingreso else 1
+                                    mov_dir = c5.selectbox("Movimiento", ["Ingreso", "Egreso"], index=mov_dir_idx, key="ed_mov_dir")
+                                    
+                                    es_efectivo = (row_ed['ingreso_efectivo'] > 0) or (row_ed['egreso'] > 0)
+                                    mov_met_idx = 0 if es_efectivo else 1 
+                                    mov_met = c6.selectbox("Método", ["Efectivo", "Transferencia", "Cheque", "Depósito", "Otro"], index=mov_met_idx, key="ed_mov_met")
+                                    
+                                    monto_actual = max(row_ed['ingreso_efectivo'], row_ed['ingreso_transferencia'], row_ed['egreso'], row_ed['egreso_transferencia'])
+                                    monto = c7.number_input("Monto ($)", min_value=0, value=int(monto_actual), step=1000, key="ed_monto_caja")
+                                    
+                                    st.write("")
+                                    col_izq, _ = st.columns([1, 4])
+                                    if col_izq.button("Actualizar Registro", type="primary", use_container_width=True):
+                                        if sub_sel and ent_sel and monto and monto > 0:
+                                            id_sub_val = int(df_sub[df_sub['nombre']==sub_sel]['id'].values[0]) if not df_sub.empty else None
+                                            id_ent_val = int(df_entidades[df_entidades['nombre']==ent_sel]['id'].values[0])
+                                            
+                                            ie = it = ee = et = 0
+                                            if mov_dir == "Ingreso":
+                                                if mov_met == "Efectivo": ie = monto
+                                                else: it = monto 
+                                            else:
+                                                if mov_met == "Efectivo": ee = monto
+                                                else: et = monto 
+                                            
+                                            editar_movimiento_caja_mill(row_ed['id'], fecha_caja, id_cat, id_sub_val, id_ent_val, ent_sel, det, ie, it, ee, et, st.session_state.user_name)
+                                            st.success("Registro corregido.")
+                                            time.sleep(0.5)
+                                            st.rerun()
+                                        else:
+                                            st.error("Campos inválidos.")
+                        else:
+                            st.warning("No hay registros recientes habilitados para su edición.")
+
+                    # ESTADO 2: FORMULARIO DE INGRESO NORMAL
+                    else:
+                        c1, c2 = st.columns(2)
+                        lista_cat = df_cat['nombre'].tolist() if not df_cat.empty else ["-"]
+                        cat_sel = c1.selectbox("Categoría", lista_cat, index=None, placeholder="Seleccione una categoría...", key="sel_cat")
+                        
+                        if cat_sel:
+                            id_cat = int(df_cat[df_cat['nombre'] == cat_sel]['id'].values[0])
+                            df_sub = obtener_subcategorias_caja(id_cat)
+                            lista_sub = df_sub['nombre'].tolist() if not df_sub.empty else ["-"]
+                            sub_sel = c2.selectbox("Subcategoría", lista_sub, index=None, placeholder="Seleccione una subcategoría...", key="sel_subcat")
+                            
+                            c3, c4 = st.columns(2)
+                            lista_ent = df_entidades['nombre'].tolist() if not df_entidades.empty else ["-"]
+                            ent_sel = c3.selectbox("Entidad", lista_ent, index=None, placeholder="Buscar entidad...", key="sel_ent")
+                            det = c4.text_input("Descripción", placeholder="Ej: Pago factura, bono extra...", key="txt_det")
+                            
+                            c5, c6, c7 = st.columns(3, vertical_alignment="bottom")
+                            mov_dir = c5.selectbox("Movimiento", ["Ingreso", "Egreso"], key="sel_mov_dir")
+                            mov_met = c6.selectbox("Método", ["Efectivo", "Transferencia", "Cheque", "Depósito", "Otro"], key="sel_mov_met")
+                            monto = c7.number_input("Monto ($)", min_value=0, value=None, step=1000, placeholder="Vacío", key="num_monto_caja")
+                            
+                            st.write("")
+                            col_izq, _ = st.columns([1, 4])
+                            if col_izq.button("Guardar", type="primary", use_container_width=True, key="btn_guardar_caja"):
+                                if sub_sel and ent_sel and monto and monto > 0:
+                                    id_sub_val = int(df_sub[df_sub['nombre']==sub_sel]['id'].values[0]) if not df_sub.empty else None
+                                    id_ent_val = int(df_entidades[df_entidades['nombre']==ent_sel]['id'].values[0])
+                                    
+                                    ie = it = ee = et = 0
+                                    if mov_dir == "Ingreso":
+                                        if mov_met == "Efectivo": ie = monto
+                                        else: it = monto 
+                                    else:
+                                        if mov_met == "Efectivo": ee = monto
+                                        else: et = monto 
+                                    
+                                    guardar_movimiento_caja_mill(fecha_caja, "Pan Especial", id_cat, id_sub_val, id_ent_val, ent_sel, det, ie, it, ee, et)
+                                    st.success("Registrado.")
+                                    time.sleep(0.5)
+                                    st.rerun()
+                                else: 
+                                    st.error("Complete todos los campos requeridos (Subcategoría, Entidad y Monto válido).")
+                        
                     
 
-        # --- PESTAÑA 2: REGISTRO ---
         with tabs_caja[1]:
             st.write("")
-            c_reg1, c_reg2 = st.columns([3, 1], vertical_alignment="bottom")
+            c_reg1, c_reg2, c_reg3 = st.columns([2, 1, 1], vertical_alignment="bottom")
             c_reg1.markdown(f"<h5 style='display:flex; align-items:center; margin: 0;'>{svg_book} Auditoría Diaria</h5>", unsafe_allow_html=True)
             
             ver_libro_mayor = False
+            modo_global = False
             if es_jefatura:
-                ver_libro_mayor = c_reg2.toggle("Ver Libro Mayor", value=True)
+                # 1. Leemos primero el Global para que domine la jerarquía
+                modo_global = c_reg3.toggle("Caja Mayor (Kilaco)", value=False, key="tgl_glb_e")
+                
+                # 2. El switch del módulo se bloquea (disabled) si el global está encendido
+                ver_libro_mayor = c_reg2.toggle("Caja Mayor (Especial)", value=True, disabled=modo_global, key="tgl_lm_e")
+                
+                # 3. Si vemos el global, forzamos internamente a que se vea todo sin filtros
+                if modo_global: ver_libro_mayor = True
             
-            df_caja = obtener_caja_del_dia(fecha_caja, 'Pan Especial')
+            if modo_global:
+                df_caja = obtener_caja_mayor_global(fecha_caja)
+            else:
+                df_caja = obtener_caja_del_dia(fecha_caja, 'Pan Especial')
             
             if not df_caja.empty:
                 df_caja.fillna(0, inplace=True)
@@ -2252,24 +2812,24 @@ def app_pan_especial():
                     tie=df_caja['ingreso_efectivo'].sum(); tit=df_caja['ingreso_transferencia'].sum()
                     tee=df_caja['egreso_efectivo'].sum(); tet=df_caja['egreso_transferencia'].sum()
                     
-                    st.dataframe(
-                        df_caja, use_container_width=True, hide_index=True, 
-                        column_config={
-                            "id": None, "rol_creador": None,
-                            "entidad": st.column_config.TextColumn("Entidad", width="medium"), 
-                            "detalle": st.column_config.TextColumn("Descripción", width="medium"), 
-                            "ingreso_efectivo": st.column_config.NumberColumn("Ingreso Efec.", format="$ %d"), 
-                            "ingreso_transferencia": st.column_config.NumberColumn("Ingreso Banco", format="$ %d"), 
-                            "egreso_efectivo": st.column_config.NumberColumn("Egreso Efec.", format="$ %d"),
-                            "egreso_transferencia": st.column_config.NumberColumn("Egreso Banco", format="$ %d")
-                        }
-                    )
+                    cols_visuales = {
+                        "id": None, "rol_creador": None,
+                        "area": st.column_config.TextColumn("Origen", width="small") if modo_global else None,
+                        "fecha": None,
+                        "entidad": st.column_config.TextColumn("Entidad", width="medium"), 
+                        "detalle": st.column_config.TextColumn("Descripción", width="medium"), 
+                        "ingreso_efectivo": st.column_config.NumberColumn("Ingreso Efec.", format="$ %d"), 
+                        "ingreso_transferencia": st.column_config.NumberColumn("Ingreso Banco", format="$ %d"), 
+                        "egreso_efectivo": st.column_config.NumberColumn("Egreso Efec.", format="$ %d"),
+                        "egreso_transferencia": st.column_config.NumberColumn("Egreso Banco", format="$ %d")
+                    }
+
+                    st.dataframe(df_caja, use_container_width=True, hide_index=True, column_config=cols_visuales)
                     
                     st.write("")
                     k1, k2, k3 = st.columns(3)
                     k1.metric("Ingresos (Efectivo)", fmt_clp(tie))
                     k2.metric("Egresos (Caja Chica)", fmt_clp(tee))
-                    
                     saldo_fisico = tie - tee
                     k3.metric("Saldo Físico en Cajón", fmt_clp(saldo_fisico), delta="A favor" if saldo_fisico >= 0 else "Faltante", delta_color="normal" if saldo_fisico >= 0 else "inverse")
                     
@@ -2279,14 +2839,13 @@ def app_pan_especial():
                     color_tx = "#166534" if balance_global >= 0 else "#991B1B"
                     borde = "#BBF7D0" if balance_global >= 0 else "#FECACA"
                     
-                    titulo_balance = "Balance Financiero Total" if ver_libro_mayor else "Balance Operativo"
+                    titulo_balance = "Balance Consolidado Panadería" if modo_global else ("Balance Financiero Total" if ver_libro_mayor else "Balance Operativo")
                     st.markdown(f"<div style='margin: 0; padding: 16px; background-color: {color_bg}; border: 1px solid {borde}; border-radius: 6px; text-align: center; color: {color_tx}; font-size: 16px;'><b>{titulo_balance}:</b> {fmt_clp(balance_global)}</div>", unsafe_allow_html=True)
                 else:
-                    st.info("No hay movimientos en la vista actual.")
+                    st.info("No hay movimientos en la vista actual tras aplicar filtros.")
             else: 
                 st.info("Sin movimientos registrados.")
 
-        # --- PESTAÑA 3: AJUSTES ---
         if not es_repartidor:
             with tabs_caja[2]:
                 st.write("")
@@ -2294,7 +2853,6 @@ def app_pan_especial():
                 
                 modo_mantenedor = st.radio("Acción", ["Crear Nueva Entidad", "Gestionar Existente"], horizontal=True, label_visibility="collapsed")
                 st.write("")
-                
                 df_mant = obtener_todas_entidades()
                 
                 if modo_mantenedor == "Crear Nueva Entidad":
@@ -2315,8 +2873,7 @@ def app_pan_especial():
                                     conn_ent.commit()
                                     st.cache_data.clear()
                                     st.success("Guardado.")
-                                    time.sleep(0.5)
-                                    st.rerun()
+                                    time.sleep(0.5); st.rerun()
                                 except Exception as e:
                                     st.error("Error al guardar. Posible duplicado.")
                                 finally:
@@ -2326,7 +2883,6 @@ def app_pan_especial():
                 else:
                     if not df_mant.empty:
                         op_gest = st.selectbox("Seleccione entidad a gestionar", df_mant['nombre'].tolist(), index=None, placeholder="Buscar entidad...")
-                        
                         if op_gest:
                             row = df_mant[df_mant['nombre'] == op_gest].iloc[0]
                             with st.form("edit_ent_form", border=False):
@@ -2382,46 +2938,53 @@ def app_pan_especial():
                     st.download_button("Descargar Archivo", b, f"Backup_{date.today()}.xlsx", "application/vnd.ms-excel")
         
         with tab_bd:
-            # 1. Lista de tablas con las nuevas incorporaciones
             tablas_esp = [
                 "control_bandejas", "control_bolsas", "stock", "despacho", "finanzas", 
                 "movimientos_credito", "transferencias", "caja_movimientos",
-                "caja_categorias", "caja_subcategorias", "entidades", "clientes_sugerencias"
+                "caja_categorias", "caja_subcategorias", "entidades", "clientes", 
+                "clientes_sugerencias", "productos", "productos_bolsas", "vendedores"
             ]
             
             c1, c2 = st.columns([1, 2])
             ts = c1.selectbox("Tabla", tablas_esp, index=None, placeholder="Seleccione una tabla para visualizar...")
             
             if ts:
-                # 2. Escudo ontológico: Separamos transacciones de catálogos
-                tablas_sin_fecha = ["caja_categorias", "caja_subcategorias", "entidades", "clientes_sugerencias"]
+                tablas_sin_fecha = ["caja_categorias", "caja_subcategorias", "entidades", "clientes", "clientes_sugerencias", "productos", "productos_bolsas", "vendedores"]
                 
                 if ts not in tablas_sin_fecha:
-                    f_del = c2.date_input("Fecha", date.today())
+                    f_del = c2.date_input("Fecha", date.today(), format="DD/MM/YYYY")
                 else:
                     c2.info("Tabla de catálogo. Mostrando todos los registros.")
                 
                 conn = get_conn()
                 try:
-                    # 3. Bifurcación de la consulta SQL
                     if ts in tablas_sin_fecha:
                         df = pd.read_sql(f"SELECT * FROM {ts} ORDER BY id DESC", conn)
                     else:
                         df = pd.read_sql(f"SELECT * FROM {ts} WHERE fecha = %s", conn, params=(f_del,))
                     
                     if not df.empty:
-                        # TRADUCCIÓN SEMÁNTICA PARA LA TABLA VISUAL
                         df_visual = df.copy()
-                        inv_vend = {v: k for k, v in dict_vend.items()}
                         
+                        # --- CORRECCIÓN ESPACIO-TEMPORAL (UTC a Santiago) ---
+                        for col in df_visual.columns:
+                            if pd.api.types.is_datetime64_any_dtype(df_visual[col]):
+                                try:
+                                    if df_visual[col].dt.tz is None:
+                                        df_visual[col] = df_visual[col].dt.tz_localize('UTC').dt.tz_convert('America/Santiago')
+                                    else:
+                                        df_visual[col] = df_visual[col].dt.tz_convert('America/Santiago')
+                                    df_visual[col] = df_visual[col].dt.strftime('%d/%m/%Y %H:%M:%S')
+                                except:
+                                    pass
+
+                        inv_vend = {v: k for k, v in dict_vend.items()}
                         if 'id_vendedor' in df_visual.columns:
                             df_visual['Repartidor'] = df_visual['id_vendedor'].map(inv_vend)
-                        
                         if 'id_producto' in df_visual.columns:
                             tabla_prod = "productos_bolsas" if ts == "control_bolsas" else "productos"
                             df_prod_temp = pd.read_sql(f"SELECT id, nombre FROM {tabla_prod}", conn)
                             df_visual['Producto'] = df_visual['id_producto'].map(dict(zip(df_prod_temp['id'], df_prod_temp['nombre'])))
-                        
                         if 'id_cliente' in df_visual.columns:
                             df_cli_temp = pd.read_sql("SELECT id, nombre FROM clientes", conn)
                             df_visual['Cliente'] = df_visual['id_cliente'].map(dict(zip(df_cli_temp['id'], df_cli_temp['nombre'])))
@@ -2431,7 +2994,6 @@ def app_pan_especial():
                         st.info("No hay registros en esta tabla para los parámetros seleccionados.")
                     
                     st.divider()
-                    # 4. Estructura de demolición (3 columnas)
                     col_id, col_dia, col_purge = st.columns(3)
                     
                     with col_id:
@@ -2444,7 +3006,6 @@ def app_pan_especial():
                                 elif 'Repartidor' in r and pd.notna(r['Repartidor']): etiqueta += f" | Rep: {r['Repartidor']}"
                                 if 'estado' in r and pd.notna(r['estado']): etiqueta += f" | Est: {r['estado']}"
                                 if 'monto' in r and pd.notna(r['monto']): etiqueta += f" | $: {r['monto']}"
-                                
                                 opciones_borrado[etiqueta] = r['id']
                             
                             seleccion_humana = st.selectbox("Seleccione el registro", list(opciones_borrado.keys()), index=None, placeholder="Buscar...")
@@ -2452,7 +3013,6 @@ def app_pan_especial():
                             if seleccion_humana:
                                 id_del = opciones_borrado[seleccion_humana]
                                 conf_id = st.toggle("Habilitar acción", key=f"tgl_id_esp_{ts}")
-                                
                                 tablas_catalogo = ["caja_categorias", "caja_subcategorias", "entidades"]
                                 texto_btn = "Desactivar Registro" if ts in tablas_catalogo else "Eliminar Registro"
                                 
@@ -2469,8 +3029,7 @@ def app_pan_especial():
                                             conn.commit()
                                             st.cache_data.clear()
                                             st.success(msg)
-                                            time.sleep(1.5)
-                                            st.rerun()
+                                            time.sleep(1.5); st.rerun()
                                         except Exception as e:
                                             st.error(f"La base de datos impidió la acción. Detalle: {e}")
                                     else: 
@@ -2494,19 +3053,16 @@ def app_pan_especial():
                     with col_purge:
                         st.markdown("**Zona de Peligro: Purga Total**")
                         st.write("⚠️ Vacía la tabla por completo y **reinicia los IDs a 1**.")
-                        # Medida de seguridad estricta
                         txt_confirm = st.text_input(f"Escriba '{ts}' para confirmar", key=f"purge_txt_{ts}")
                         if st.button("Vaciar y Reiniciar IDs", type="primary"):
                             if txt_confirm == ts:
                                 try:
                                     with conn.cursor() as c:
-                                        # Comando maestro para resetear el autoincremento
                                         c.execute(f"TRUNCATE TABLE {ts} RESTART IDENTITY CASCADE")
                                     conn.commit()
                                     st.cache_data.clear()
                                     st.success(f"La tabla {ts} ha sido vaciada y sus IDs reiniciados.")
-                                    time.sleep(1.5)
-                                    st.rerun()
+                                    time.sleep(1.5); st.rerun()
                                 except Exception as e:
                                     st.error(f"Error al vaciar la tabla: {e}")
                             else:
@@ -2515,7 +3071,6 @@ def app_pan_especial():
                 except Exception as e: st.error(f"Error en consulta: {e}")
                 finally: conn.close()
             
-            
 
         with tab_mig:
             st.write("")
@@ -2523,7 +3078,7 @@ def app_pan_especial():
             
             tipo_migracion = st.selectbox(
                 "Seleccione el módulo a importar:", 
-                ["Bandejas (Pan Especial)", "Bolsas (Pan Especial)", "Producción (Pan Especial)", "Transferencias (Pan Especial)", "Créditos Históricos"],
+                ["Bandejas (Pan Especial)", "Bolsas (Pan Especial)", "Producción (Pan Especial)", "Despacho (Pan Especial)", "Cobranza (Pan Especial)", "Transferencias (Pan Especial)", "Créditos Históricos"],
                 index=None, placeholder="Seleccione el tipo de archivo..."
             )
             
@@ -2633,6 +3188,74 @@ def app_pan_especial():
                                         else:
                                             errores.append(f"Fila {i+2}: No hay match exacto para el Repartidor '{row['Repartidor']}'.")
 
+                            elif tipo_migracion == "Despacho (Pan Especial)":
+                                df_vend = pd.read_sql("SELECT id, nombre FROM vendedores", conn)
+                                dict_vend = dict(zip(df_vend['nombre'].str.lower().str.strip(), df_vend['id']))
+                                
+                                df_prod = pd.read_sql("SELECT id, nombre FROM productos", conn)
+                                dict_prod = dict(zip(df_prod['nombre'].str.lower().str.strip(), df_prod['id']))
+
+                                with conn.cursor() as c:
+                                    for i, row in df_up.iterrows():
+                                        v_nom = str(row['Repartidor']).lower().strip()
+                                        p_nom = str(row['Producto']).lower().strip()
+                                        
+                                        id_v = dict_vend.get(v_nom)
+                                        id_p = dict_prod.get(p_nom)
+
+                                        if id_v and id_p:
+                                            # Extraemos los valores de forma segura tolerando variaciones en los nombres de columnas del Excel
+                                            s_ant = safe_int(row.get('Saldo Anterior', 0))
+                                            carga = safe_int(row.get('Carga', 0))
+                                            dev = safe_int(row.get('Devolución', row.get('Devolucion', 0))) 
+                                            s_act = safe_int(row.get('Saldo Actual', row.get('Saldo Final', 0)))
+                                            
+                                            # Recalculamos la venta real por seguridad algorítmica
+                                            vta = max(0, (s_ant + carga) - dev - s_act)
+                                            
+                                            c.execute("""INSERT INTO despacho 
+                                                         (fecha, id_vendedor, id_producto, saldo_anterior, carga, devolucion_muestra, saldo_actual, venta_unidades) 
+                                                         VALUES (%s,%s,%s,%s,%s,%s,%s,%s)""",
+                                                      (row['Fecha'], id_v, id_p, s_ant, carga, dev, s_act, vta))
+                                            exitos += 1
+                                        else:
+                                            errores.append(f"Fila {i+2}: No hay match para Repartidor '{row.get('Repartidor')}' o Producto '{row.get('Producto')}'.")
+
+                            elif tipo_migracion == "Cobranza (Pan Especial)":
+                                df_vend = pd.read_sql("SELECT id, nombre FROM vendedores", conn)
+                                dict_vend = dict(zip(df_vend['nombre'].str.lower().str.strip(), df_vend['id']))
+
+                                with conn.cursor() as c:
+                                    for i, row in df_up.iterrows():
+                                        v_nom = str(row.get('Repartidor', '')).lower().strip()
+                                        id_v = dict_vend.get(v_nom)
+
+                                        if id_v:
+                                            # Extracción segura con valores por defecto si la columna viene vacía
+                                            f_val = row['Fecha']
+                                            cc = safe_int(row.get('Cobro Créditos', 0))
+                                            co = safe_int(row.get('Créditos (Fiado)', 0))
+                                            ds = safe_int(row.get('Descuentos', 0))
+                                            bn = safe_int(row.get('Bencina', 0))
+                                            su = safe_int(row.get('Sueldo', 0))
+                                            om = safe_int(row.get('Otros Gastos', 0))
+                                            od = str(row.get('Detalle Otros Gastos', 'Varios'))
+                                            ef = safe_int(row.get('Efectivo', 0))
+                                            tr = safe_int(row.get('Transferencia', 0))
+                                            pc = safe_int(row.get('Centralizado', 0))
+                                            cc_det = str(row.get('Detalle Cobro Créditos', 'Varios'))
+
+                                            c.execute("""INSERT INTO finanzas 
+                                                         (fecha, id_vendedor, creditos_cobrados, creditos_otorgados, 
+                                                          descuentos_total, bencina, sueldo, otros_gastos_monto, 
+                                                          otros_gastos_detalle, efectivo_rendido, transferencia_rendida, 
+                                                          pago_centralizado, creditos_cobrados_detalle) 
+                                                         VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
+                                                      (f_val, id_v, cc, co, ds, bn, su, om, od, ef, tr, pc, cc_det))
+                                            exitos += 1
+                                        else:
+                                            errores.append(f"Fila {i+2}: No hay match para Repartidor '{row.get('Repartidor')}'.")
+
                             conn.commit()
                             st.cache_data.clear()
                             
@@ -2646,6 +3269,7 @@ def app_pan_especial():
                             st.error(f"Error procesando el archivo: {e}")
                         finally:
                             conn.close()
+           
             
 
 # ----------------------------------------------------
@@ -2662,8 +3286,11 @@ def app_pan_corriente():
     opciones_full = ["Producción", "Despacho", "Cobranza", "Clientes", "Caja"]
     iconos_full   = ["tools",      "truck",    "currency-dollar", "people", "cash-stack"]
     
-    if rol in ["admin", "pan_corriente", "supervisor", "cajero_integral"]:
+    if rol in ["admin", "pan_corriente", "supervisor"]:
         menu_options = opciones_full; menu_icons = iconos_full; permiso_editar = True
+    elif rol == "cajero_integral":
+        indices = [2, 3, 4] # Cobranza, Clientes, Caja
+        menu_options = [opciones_full[i] for i in indices]; menu_icons = [iconos_full[i] for i in indices]; permiso_editar = True
     elif es_repartidor:
         indices_permitidos = [1, 2, 3]
         menu_options = [opciones_full[i] for i in indices_permitidos]
@@ -2704,7 +3331,6 @@ def app_pan_corriente():
         if df_vend.empty: st.error("ID inválido."); st.stop()
 
     dict_vend = dict(zip(df_vend['nombre'], df_vend['id']))
-    lista_descripciones = sorted(["Alejandro Valenzuela", "Carlos Alvarez", "Randy Galvis", "Carlos Jara", "Eduardo Sanchez", "Edward Baillont", "Flavio Meza", "Franco De La Puente", "Hugo Palacios", "Jose Perozo", "Marcelo Jara", "Robert Cordova", "Robert Mogollon", "Hector Silva", "Byron Navarro", "Jose Albarracin", "Tomas Mendez", "Junior Negron", "Kilaco Venta", "Otros", "Petroleo", "Anderson", "Aseo", "Alberto", "Juanito", "Marmix", "Osvaldo Torres", "Fabiola Tessini", "Ines Cordova", "Mitzy Panes", "David", "Aceite", "Alex (Carne Pato)", "Provision", "Yves", "Kervis", "Carlos Hornero", "Mila", "Yordys", "Gene", "Yeilid", "Michel", "Maestro Guillermo", "Rahab", "Mary", "Imposiciones", "Caro", "Yeimy", "Leo", "Jonathan", "Luis", "Jorge", "Genesis", "Guillermo", "Paola"])
     
     if es_repartidor: 
         vendedores_corriente = df_vend['nombre'].tolist() 
@@ -2725,13 +3351,12 @@ def app_pan_corriente():
         svg_adj = '''<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" fill="#556B2F" class="bi bi-sliders" viewBox="0 0 16 16" style="margin-right: 8px; margin-bottom: 4px;"><path fill-rule="evenodd" d="M11.5 2a1.5 1.5 0 1 0 0 3 1.5 1.5 0 0 0 0-3zM9.05 3a2.5 2.5 0 0 1 4.9 0H16v1h-2.05a2.5 2.5 0 0 1-4.9 0H0V3h9.05zM4.5 7a1.5 1.5 0 1 0 0 3 1.5 1.5 0 0 0 0-3zM2.05 8a2.5 2.5 0 0 1 4.9 0H16v1H6.95a2.5 2.5 0 0 1-4.9 0H0V8h2.05zm9.45 4a1.5 1.5 0 1 0 0 3 1.5 1.5 0 0 0 0-3zm-2.45 1a2.5 2.5 0 0 1 4.9 0H16v1h-2.05a2.5 2.5 0 0 1-4.9 0H0v-1h9.05z"/></svg>'''
 
         c_p1, _ = st.columns([1, 4])
-        f_prod = c_p1.date_input("Fecha", date.today())
+        f_prod = c_p1.date_input("Fecha", date.today(), format="DD/MM/YYYY")
         
         df_unificado, extras_dict = get_produccion_corriente_unificada(f_prod)
         
         tab_tabla, tab_extras = st.tabs(["Resumen Diario", "Extras"])
         
-        # --- PESTAÑA 1: RESUMEN DIARIO ---
         with tab_tabla:
             st.write("")
             st.markdown(f"<h5 style='display:flex; align-items:center;'>{svg_prod} Caritas</h5>", unsafe_allow_html=True)
@@ -2751,7 +3376,6 @@ def app_pan_corriente():
                 k2.metric("Total Día", f"{int(df_unificado['rinde_dia'].sum())} kg")
                 k3.metric("Producción Total", f"{int(df_unificado['rinde_noche'].sum() + df_unificado['rinde_dia'].sum())} kg")
 
-        # --- PESTAÑA 2: EXTRAS ---
         if permiso_editar:
             with tab_extras:
                 st.write("")
@@ -2784,7 +3408,7 @@ def app_pan_corriente():
         svg_truck = '''<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" fill="#556B2F" class="bi bi-truck" viewBox="0 0 16 16" style="margin-right: 8px; margin-bottom: 4px;"><path d="M0 3.5A1.5 1.5 0 0 1 1.5 2h9A1.5 1.5 0 0 1 12 3.5V5h1.02a1.5 1.5 0 0 1 1.17.563l1.481 1.85a1.5 1.5 0 0 1 .329.938V10.5a1.5 1.5 0 0 1-1.5 1.5H14a2 2 0 1 1-4 0H5a2 2 0 1 1-3.998-.085A1.5 1.5 0 0 1 0 10.5v-7zm1.294 7.456A1.999 1.999 0 0 1 4.732 11h5.536a2.01 2.01 0 0 1 .732-.732V3.5a.5.5 0 0 0-.5-.5h-9a.5.5 0 0 0-.5.5v7a.5.5 0 0 0 .294.456zM12 10a2 2 0 0 1 1.732 1h.768a.5.5 0 0 0 .5-.5V8.35a.5.5 0 0 0-.11-.312l-1.48-1.85A.5.5 0 0 0 13.02 6H12v4zm-9 1a1 1 0 1 0 0 2 1 1 0 0 0 0-2zm9 0a1 1 0 1 0 0 2 1 1 0 0 0 0-2z"/></svg>'''
         
         c1, c2, c3 = st.columns([1, 2, 2], vertical_alignment="bottom")
-        f_desp = c1.date_input("Fecha", date.today())
+        f_desp = c1.date_input("Fecha", date.today(), format="DD/MM/YYYY")
         
         v_desp = c2.selectbox("Repartidor", vendedores_corriente, index=idx_defecto, placeholder="Seleccione un repartidor...", disabled=es_repartidor, key="sel_rep_corr")
         
@@ -2813,7 +3437,14 @@ def app_pan_corriente():
                     
                     df_visual = df_ruta[cols_finales]
                     altura_dinamica = (len(df_visual) * 36) + 42 
-                    edited_ruta = st.data_editor(df_visual, column_config=cols_cfg, hide_index=True, use_container_width=True, height=altura_dinamica, disabled=not permiso_editar)
+                    
+                    # EL PINCEL: Si la columna empieza con "carga_", es blanca y editable. El resto gris.
+                    def estilizar_despacho_corr(row):
+                        return ['background-color: #FFFFFF; font-weight: 600; color: #1F2937;' if str(c).startswith('carga_') else 'background-color: #F8F9FA; color: #6C757D;' for c in row.index]
+                    
+                    df_styled_ruta = df_visual.style.apply(estilizar_despacho_corr, axis=1)
+                    
+                    edited_ruta = st.data_editor(df_styled_ruta, column_config=cols_cfg, hide_index=True, use_container_width=True, height=altura_dinamica, disabled=not permiso_editar)
                     
                     tot_kg = int(edited_ruta['total_carga'].sum())
                     
@@ -2833,14 +3464,14 @@ def app_pan_corriente():
         svg_chart = '''<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" fill="#556B2F" class="bi bi-bar-chart" viewBox="0 0 16 16" style="margin-right: 8px; margin-bottom: 2px;"><path d="M4 11H2v3h2v-3zm5-4H7v7h2V7zm5-5v12h-2V2h2zm-2-1a1 1 0 0 0-1 1v12a1 1 0 0 0 1 1h2a1 1 0 0 0 1-1V2a1 1 0 0 0-1-1h-2zM6 7a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1v7a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1V7zm-5 4a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1v3a1 1 0 0 1-1 1H2a1 1 0 0 1-1-1v-3z"/></svg>'''
 
         c1, c2, c3 = st.columns([1, 2, 2], vertical_alignment="bottom")
-        f_cob = c1.date_input("Fecha", date.today())
+        f_cob = c1.date_input("Fecha", date.today(), format="DD/MM/YYYY")
         
         v_cob = c2.selectbox("Repartidor", vendedores_corriente, index=idx_defecto, placeholder="Seleccione un repartidor...", disabled=es_repartidor, key="sel_rep_cob_corr")
         id_vc = dict_vend.get(v_cob) if v_cob in dict_vend else None
         
         tab_pagos, tab_ren, tab_rep = st.tabs(["Pagos", "Rendición", "Reporte"])
         
-        # --- PESTAÑA 1: PAGOS ---
+                # --- PESTAÑA 1: PAGOS ---
         with tab_pagos:
             if id_vc:
                 df_pagos = get_despacho_corriente(f_cob, id_vc)
@@ -2868,7 +3499,14 @@ def app_pan_corriente():
                         
                         df_visual_p = df_pagos[cols_finales]
                         altura_dinamica_p = (len(df_visual_p) * 36) + 42
-                        edited_pagos = st.data_editor(df_visual_p, column_config=cols_pagos, hide_index=True, use_container_width=True, height=altura_dinamica_p, disabled=not permiso_editar)
+                        
+                        # EL PINCEL: Paga y Pago Centralizado van en blanco, el resto gris
+                        def estilizar_pagos_corr(row):
+                            return ['background-color: #FFFFFF; font-weight: 600; color: #1F2937;' if c in ['paga', 'pago_centralizado'] else 'background-color: #F8F9FA; color: #6C757D;' for c in row.index]
+                        
+                        df_styled_p = df_visual_p.style.apply(estilizar_pagos_corr, axis=1)
+                        
+                        edited_pagos = st.data_editor(df_styled_p, column_config=cols_pagos, hide_index=True, use_container_width=True, height=altura_dinamica_p, disabled=not permiso_editar)
                         
                         st.write("")
                         if permiso_editar and st.button("Guardar Pagos", type="primary"):
@@ -2949,17 +3587,35 @@ def app_pan_corriente():
         with tab_rep:
             st.write("")
             st.markdown(f"<h5 style='display:flex; align-items:center;'>{svg_chart} Estado General</h5>", unsafe_allow_html=True)
-            col_r1, col_r2, col_r3 = st.columns([2, 2, 2], vertical_alignment="bottom")
-            fi = col_r1.date_input("Desde", date.today() - timedelta(days=7), key="r_ini_c")
-            ff = col_r2.date_input("Hasta", date.today(), key="r_fin_c")
             
-            if col_r3.button("Generar Reporte", type="primary", use_container_width=True):
+            col_r1, col_r2, col_r3, col_r4 = st.columns([2, 2, 3, 2], vertical_alignment="bottom")
+            fi = col_r1.date_input("Desde", date.today() - timedelta(days=7), key="r_ini_c", format="DD/MM/YYYY")
+            ff = col_r2.date_input("Hasta", date.today(), key="r_fin_c", format="DD/MM/YYYY")
+            
+            # --- SELECTOR INTELIGENTE DE AISLAMIENTO ---
+            if not es_repartidor:
+                filtro_rep_c = col_r3.selectbox("Filtrar Repartidor", ["Todos"] + vendedores_corriente, index=0, key="filt_rep_rep_c")
+            else:
+                filtro_rep_c = col_r3.selectbox("Repartidor", [nombre_vendedor_actual], disabled=True, key="filt_rep_rep_c")
+            
+            if col_r4.button("Generar Reporte", type="primary", use_container_width=True):
                 df_res = get_resumen_visor_corriente(fi, ff)
+                
                 if not df_res.empty:
+                    # --- MOTOR DE FILTRADO ---
                     if es_repartidor:
-                        df_res = df_res[df_res['Vendedor'] == v_cob]
-                    
+                        df_res = df_res[df_res['Vendedor'] == nombre_vendedor_actual]
+                    elif filtro_rep_c != "Todos":
+                        df_res = df_res[df_res['Vendedor'] == filtro_rep_c]
+                        
                     if not df_res.empty:
+                        # ORDEN CRONOLÓGICO
+                        if 'fecha' in df_res.columns.str.lower():
+                            col_fecha = 'Fecha' if 'Fecha' in df_res.columns else 'fecha'
+                            df_res[col_fecha] = pd.to_datetime(df_res[col_fecha], dayfirst=True, errors='ignore')
+                            df_res = df_res.sort_values(by=[col_fecha, 'Vendedor'], ascending=[False, True])
+                            df_res[col_fecha] = df_res[col_fecha].dt.strftime('%d/%m/%Y')
+                            
                         def color_saldo(val):
                             if val == 0: return 'background-color: #F0FDF4; color: #166534' 
                             elif val > 0: return 'background-color: #FEF2F2; color: #991B1B'
@@ -2976,6 +3632,10 @@ def app_pan_corriente():
                         m1, m2 = st.columns(2)
                         m1.metric("Deuda Acumulada Repartidor", fmt_clp(df_res['saldo_final'].sum()))
                         m2.metric("Deuda Acumulada Clientes (Calle)", fmt_clp(df_res['saldo_clientes'].sum()))
+                    else:
+                        st.info("No hay registros para la selección en este rango de fechas.")
+                else:
+                    st.info("Sin registros financieros en este período.")
 
     elif seleccion == "Clientes":
         st.title("Gestión de Clientes")
@@ -3187,7 +3847,7 @@ def app_pan_corriente():
         es_jefatura = rol in ["admin", "supervisor"]
         
         c_f1, _ = st.columns([1, 4])
-        fecha_caja = c_f1.date_input("Fecha", date.today(), key="f_caja_corr_global")
+        fecha_caja = c_f1.date_input("Fecha", date.today(), key="f_caja_corr_global", format="DD/MM/YYYY")
             
         tabs_caja = st.tabs(["Operación", "Registro", "Ajustes"]) if not es_repartidor else st.tabs(["Consulta"])
         
@@ -3195,65 +3855,172 @@ def app_pan_corriente():
         with tabs_caja[0]:
             if permiso_editar:
                 st.write("")
-                with st.container(border=True):
-                    st.markdown(f"<h5 style='display:flex; align-items:center;'>{svg_cash} Nuevo Movimiento</h5>", unsafe_allow_html=True)
-                    
-                    df_cat = obtener_categorias_caja()
-                    df_entidades = obtener_entidades_caja("Corriente") 
-                    
-                    c1, c2 = st.columns(2)
-                    lista_cat = df_cat['nombre'].tolist() if not df_cat.empty else ["-"]
-                    cat_sel = c1.selectbox("Categoría", lista_cat, index=None, placeholder="Seleccione una categoría...", key="sel_cat_c")
-                    
-                    if cat_sel:
-                        id_cat = int(df_cat[df_cat['nombre'] == cat_sel]['id'].values[0])
-                        df_sub = obtener_subcategorias_caja(id_cat)
-                        lista_sub = df_sub['nombre'].tolist() if not df_sub.empty else ["-"]
-                        sub_sel = c2.selectbox("Subcategoría", lista_sub, index=None, placeholder="Seleccione una subcategoría...", key="sel_subcat_c")
-                        
-                        c3, c4 = st.columns(2)
-                        lista_ent = df_entidades['nombre'].tolist() if not df_entidades.empty else ["-"]
-                        ent_sel = c3.selectbox("Entidad", lista_ent, index=None, placeholder="Buscar entidad...", key="sel_ent_c")
-                        det = c4.text_input("Descripción", placeholder="Ej: Pago factura, bono extra...", key="txt_det_c")
-                        
-                        c5, c6, c7 = st.columns(3, vertical_alignment="bottom")
-                        mov_dir = c5.selectbox("Movimiento", ["Ingreso", "Egreso"], key="sel_mov_dir_c")
-                        mov_met = c6.selectbox("Método", ["Efectivo", "Transferencia", "Cheque", "Depósito", "Otro"], key="sel_mov_met_c")
-                        monto = c7.number_input("Monto ($)", min_value=0, value=None, step=1000, placeholder="Vacío", key="num_monto_caja_c")
-                        
-                        st.write("")
-                        col_izq, _ = st.columns([1, 4])
-                        if col_izq.button("Guardar", type="primary", use_container_width=True, key="btn_guardar_caja_c"):
-                            if sub_sel and ent_sel and monto and monto > 0:
-                                id_sub_val = int(df_sub[df_sub['nombre']==sub_sel]['id'].values[0]) if not df_sub.empty else None
-                                id_ent_val = int(df_entidades[df_entidades['nombre']==ent_sel]['id'].values[0])
-                                
-                                ie = it = ee = et = 0
-                                if mov_dir == "Ingreso":
-                                    if mov_met == "Efectivo": ie = monto
-                                    else: it = monto 
-                                else:
-                                    if mov_met == "Efectivo": ee = monto
-                                    else: et = monto 
-                                
-                                guardar_movimiento_caja_mill(fecha_caja, "Pan Corriente", id_cat, id_sub_val, id_ent_val, ent_sel, det, ie, it, ee, et)
-                                st.success("Registrado.")
-                                time.sleep(0.5)
-                                st.rerun()
-                            else: 
-                                st.error("Complete todos los campos requeridos (Subcategoría, Entidad y Monto válido).")
+                
+                # El interruptor estético
+                c_head, c_tog = st.columns([3, 1], vertical_alignment="bottom")
+                c_head.markdown(f"<h5 style='display:flex; align-items:center; margin-bottom: 0;'>{svg_cash} Nuevo Movimiento</h5>", unsafe_allow_html=True)
+                
+                modo_correccion = c_tog.toggle("Corregir un registro", key="tgl_corr_caja_c")
+                
+                df_cat = obtener_categorias_caja()
+                df_entidades = obtener_entidades_caja("Corriente") 
 
-        # --- PESTAÑA 2: REGISTRO ---
+                with st.container(border=True):
+                    # ESTADO 1: FORMULARIO DE CORRECCIÓN
+                    if modo_correccion:
+                        df_editables = obtener_caja_editables("Pan Corriente", es_jefatura)
+                        
+                        if not df_editables.empty:
+                            st.info("Mostrando registros editables (Candado Temporal).")
+                            
+                            opciones_edicion = {}
+                            for _, r in df_editables.iterrows():
+                                fecha_str = r['fecha'].strftime("%d/%m/%Y")
+                                tipo_monto = ""
+                                if r['ingreso_efectivo'] > 0: tipo_monto = f"+ $ {int(r['ingreso_efectivo'])} (Efec)"
+                                elif r['ingreso_transferencia'] > 0: tipo_monto = f"+ $ {int(r['ingreso_transferencia'])} (Trans)"
+                                elif r['egreso'] > 0: tipo_monto = f"- $ {int(r['egreso'])} (Efec)"
+                                elif r['egreso_transferencia'] > 0: tipo_monto = f"- $ {int(r['egreso_transferencia'])} (Trans)"
+                                
+                                eq = f"{fecha_str} | {r['descripcion']} | {r['item']} | {tipo_monto}"
+                                opciones_edicion[eq] = r
+                                
+                            sel_reg = st.selectbox("Seleccione movimiento a corregir", list(opciones_edicion.keys()), index=None, placeholder="Buscar registro...", key="sel_ed_caja_c")
+                            
+                            if sel_reg:
+                                row_ed = opciones_edicion[sel_reg]
+                                st.divider()
+                                
+                                c1, c2 = st.columns(2)
+                                
+                                idx_cat = df_cat[df_cat['id'] == row_ed['id_categoria']].index[0] if pd.notna(row_ed['id_categoria']) and not df_cat.empty else 0
+                                cat_sel = c1.selectbox("Categoría", df_cat['nombre'].tolist() if not df_cat.empty else ["-"], index=int(idx_cat), key="ed_cat_c")
+                                
+                                if cat_sel:
+                                    id_cat = int(df_cat[df_cat['nombre'] == cat_sel]['id'].values[0])
+                                    df_sub = obtener_subcategorias_caja(id_cat)
+                                    lista_sub = df_sub['nombre'].tolist() if not df_sub.empty else ["-"]
+                                    
+                                    idx_sub = 0
+                                    if pd.notna(row_ed['id_subcategoria']) and not df_sub.empty:
+                                        match_sub = df_sub[df_sub['id'] == row_ed['id_subcategoria']]
+                                        if not match_sub.empty: idx_sub = match_sub.index[0]
+                                        
+                                    sub_sel = c2.selectbox("Subcategoría", lista_sub, index=int(idx_sub), key="ed_subcat_c")
+                                    
+                                    c3, c4 = st.columns(2)
+                                    lista_ent = df_entidades['nombre'].tolist() if not df_entidades.empty else ["-"]
+                                    
+                                    idx_ent = 0
+                                    if pd.notna(row_ed['id_entidad']) and not df_entidades.empty:
+                                        match_ent = df_entidades[df_entidades['id'] == row_ed['id_entidad']]
+                                        if not match_ent.empty: idx_ent = match_ent.index[0]
+                                        
+                                    ent_sel = c3.selectbox("Entidad", lista_ent, index=int(idx_ent), key="ed_ent_c")
+                                    det = c4.text_input("Descripción", value=str(row_ed['item']) if pd.notna(row_ed['item']) else "", key="ed_det_c")
+                                    
+                                    c5, c6, c7 = st.columns(3, vertical_alignment="bottom")
+                                    
+                                    es_ingreso = (row_ed['ingreso_efectivo'] > 0) or (row_ed['ingreso_transferencia'] > 0)
+                                    mov_dir_idx = 0 if es_ingreso else 1
+                                    mov_dir = c5.selectbox("Movimiento", ["Ingreso", "Egreso"], index=mov_dir_idx, key="ed_mov_dir_c")
+                                    
+                                    es_efectivo = (row_ed['ingreso_efectivo'] > 0) or (row_ed['egreso'] > 0)
+                                    mov_met_idx = 0 if es_efectivo else 1 
+                                    mov_met = c6.selectbox("Método", ["Efectivo", "Transferencia", "Cheque", "Depósito", "Otro"], index=mov_met_idx, key="ed_mov_met_c")
+                                    
+                                    monto_actual = max(row_ed['ingreso_efectivo'], row_ed['ingreso_transferencia'], row_ed['egreso'], row_ed['egreso_transferencia'])
+                                    monto = c7.number_input("Monto ($)", min_value=0, value=int(monto_actual), step=1000, key="ed_num_monto_c")
+                                    
+                                    st.write("")
+                                    col_izq, _ = st.columns([1, 4])
+                                    if col_izq.button("Actualizar Registro", type="primary", use_container_width=True, key="ed_btn_upd_c"):
+                                        if sub_sel and ent_sel and monto and monto > 0:
+                                            id_sub_val = int(df_sub[df_sub['nombre']==sub_sel]['id'].values[0]) if not df_sub.empty else None
+                                            id_ent_val = int(df_entidades[df_entidades['nombre']==ent_sel]['id'].values[0])
+                                            
+                                            ie = it = ee = et = 0
+                                            if mov_dir == "Ingreso":
+                                                if mov_met == "Efectivo": ie = monto
+                                                else: it = monto 
+                                            else:
+                                                if mov_met == "Efectivo": ee = monto
+                                                else: et = monto 
+                                            
+                                            editar_movimiento_caja_mill(row_ed['id'], fecha_caja, id_cat, id_sub_val, id_ent_val, ent_sel, det, ie, it, ee, et, st.session_state.user_name)
+                                            st.success("Registro corregido.")
+                                            time.sleep(0.5)
+                                            st.rerun()
+                                        else:
+                                            st.error("Campos inválidos.")
+                        else:
+                            st.warning("No hay registros recientes habilitados para su edición.")
+
+                    # ESTADO 2: FORMULARIO DE INGRESO NORMAL
+                    else:
+                        c1, c2 = st.columns(2)
+                        lista_cat = df_cat['nombre'].tolist() if not df_cat.empty else ["-"]
+                        cat_sel = c1.selectbox("Categoría", lista_cat, index=None, placeholder="Seleccione una categoría...", key="sel_cat_c")
+                        
+                        if cat_sel:
+                            id_cat = int(df_cat[df_cat['nombre'] == cat_sel]['id'].values[0])
+                            df_sub = obtener_subcategorias_caja(id_cat)
+                            lista_sub = df_sub['nombre'].tolist() if not df_sub.empty else ["-"]
+                            sub_sel = c2.selectbox("Subcategoría", lista_sub, index=None, placeholder="Seleccione una subcategoría...", key="sel_subcat_c")
+                            
+                            c3, c4 = st.columns(2)
+                            lista_ent = df_entidades['nombre'].tolist() if not df_entidades.empty else ["-"]
+                            ent_sel = c3.selectbox("Entidad", lista_ent, index=None, placeholder="Buscar entidad...", key="sel_ent_c")
+                            det = c4.text_input("Descripción", placeholder="Ej: Pago factura, bono extra...", key="txt_det_c")
+                            
+                            c5, c6, c7 = st.columns(3, vertical_alignment="bottom")
+                            mov_dir = c5.selectbox("Movimiento", ["Ingreso", "Egreso"], key="sel_mov_dir_c")
+                            mov_met = c6.selectbox("Método", ["Efectivo", "Transferencia", "Cheque", "Depósito", "Otro"], key="sel_mov_met_c")
+                            monto = c7.number_input("Monto ($)", min_value=0, value=None, step=1000, placeholder="Vacío", key="num_monto_caja_c")
+                            
+                            st.write("")
+                            col_izq, _ = st.columns([1, 4])
+                            if col_izq.button("Guardar", type="primary", use_container_width=True, key="btn_guardar_caja_c"):
+                                if sub_sel and ent_sel and monto and monto > 0:
+                                    id_sub_val = int(df_sub[df_sub['nombre']==sub_sel]['id'].values[0]) if not df_sub.empty else None
+                                    id_ent_val = int(df_entidades[df_entidades['nombre']==ent_sel]['id'].values[0])
+                                    
+                                    ie = it = ee = et = 0
+                                    if mov_dir == "Ingreso":
+                                        if mov_met == "Efectivo": ie = monto
+                                        else: it = monto 
+                                    else:
+                                        if mov_met == "Efectivo": ee = monto
+                                        else: et = monto 
+                                    
+                                    guardar_movimiento_caja_mill(fecha_caja, "Pan Corriente", id_cat, id_sub_val, id_ent_val, ent_sel, det, ie, it, ee, et)
+                                    st.success("Registrado.")
+                                    time.sleep(0.5)
+                                    st.rerun()
+                                else: 
+                                    st.error("Complete todos los campos requeridos (Subcategoría, Entidad y Monto válido).")
+
         with tabs_caja[1]:
             st.write("")
-            c_reg1, c_reg2 = st.columns([3, 1], vertical_alignment="bottom")
+            c_reg1, c_reg2, c_reg3 = st.columns([2, 1, 1], vertical_alignment="bottom")
             c_reg1.markdown(f"<h5 style='display:flex; align-items:center; margin: 0;'>{svg_book} Auditoría Diaria</h5>", unsafe_allow_html=True)
             
             ver_libro_mayor = False
+            modo_global = False
             if es_jefatura:
-                ver_libro_mayor = c_reg2.toggle("Ver Libro Mayor", value=True, key="tgl_lm_c")
+                # 1. Leemos primero el Global para que domine la jerarquía
+                modo_global = c_reg3.toggle("Caja Mayor (Kilaco)", value=False, key="tgl_glb_e")
+                
+                # 2. El switch del módulo se bloquea (disabled) si el global está encendido
+                ver_libro_mayor = c_reg2.toggle("Caja Mayor (Corriente)", value=True, disabled=modo_global, key="tgl_lm_e")
+                
+                # 3. Si vemos el global, forzamos internamente a que se vea todo sin filtros
+                if modo_global: ver_libro_mayor = True
             
-            df_caja = obtener_caja_del_dia(fecha_caja, 'Pan Corriente')
+            if modo_global:
+                df_caja = obtener_caja_mayor_global(fecha_caja)
+            else:
+                df_caja = obtener_caja_del_dia(fecha_caja, 'Pan Corriente')
             
             if not df_caja.empty:
                 df_caja.fillna(0, inplace=True)
@@ -3265,24 +4032,24 @@ def app_pan_corriente():
                     tie=df_caja['ingreso_efectivo'].sum(); tit=df_caja['ingreso_transferencia'].sum()
                     tee=df_caja['egreso_efectivo'].sum(); tet=df_caja['egreso_transferencia'].sum()
                     
-                    st.dataframe(
-                        df_caja, use_container_width=True, hide_index=True, 
-                        column_config={
-                            "id": None, "rol_creador": None, "area": None,
-                            "entidad": st.column_config.TextColumn("Entidad", width="medium"), 
-                            "detalle": st.column_config.TextColumn("Descripción", width="medium"), 
-                            "ingreso_efectivo": st.column_config.NumberColumn("Ingreso Efec.", format="$ %d"), 
-                            "ingreso_transferencia": st.column_config.NumberColumn("Ingreso Banco", format="$ %d"), 
-                            "egreso_efectivo": st.column_config.NumberColumn("Egreso Efec.", format="$ %d"),
-                            "egreso_transferencia": st.column_config.NumberColumn("Egreso Banco", format="$ %d")
-                        }
-                    )
+                    cols_visuales = {
+                        "id": None, "rol_creador": None,
+                        "area": st.column_config.TextColumn("Origen", width="small") if modo_global else None,
+                        "fecha": None,
+                        "entidad": st.column_config.TextColumn("Entidad", width="medium"), 
+                        "detalle": st.column_config.TextColumn("Descripción", width="medium"), 
+                        "ingreso_efectivo": st.column_config.NumberColumn("Ingreso Efec.", format="$ %d"), 
+                        "ingreso_transferencia": st.column_config.NumberColumn("Ingreso Banco", format="$ %d"), 
+                        "egreso_efectivo": st.column_config.NumberColumn("Egreso Efec.", format="$ %d"),
+                        "egreso_transferencia": st.column_config.NumberColumn("Egreso Banco", format="$ %d")
+                    }
+
+                    st.dataframe(df_caja, use_container_width=True, hide_index=True, column_config=cols_visuales)
                     
                     st.write("")
                     k1, k2, k3 = st.columns(3)
                     k1.metric("Ingresos (Efectivo)", fmt_clp(tie))
                     k2.metric("Egresos (Caja Chica)", fmt_clp(tee))
-                    
                     saldo_fisico = tie - tee
                     k3.metric("Saldo Físico en Cajón", fmt_clp(saldo_fisico), delta="A favor" if saldo_fisico >= 0 else "Faltante", delta_color="normal" if saldo_fisico >= 0 else "inverse")
                     
@@ -3292,10 +4059,13 @@ def app_pan_corriente():
                     color_tx = "#166534" if balance_global >= 0 else "#991B1B"
                     borde = "#BBF7D0" if balance_global >= 0 else "#FECACA"
                     
-                    titulo_balance = "Balance Financiero Total" if ver_libro_mayor else "Balance Operativo"
+                    titulo_balance = "Balance Consolidado Panadería" if modo_global else ("Balance Financiero Total" if ver_libro_mayor else "Balance Operativo")
                     st.markdown(f"<div style='margin: 0; padding: 16px; background-color: {color_bg}; border: 1px solid {borde}; border-radius: 6px; text-align: center; color: {color_tx}; font-size: 16px;'><b>{titulo_balance}:</b> {fmt_clp(balance_global)}</div>", unsafe_allow_html=True)
+                else:
+                    st.info("No hay movimientos en la vista actual tras aplicar filtros.")
+            else: 
+                st.info("Sin movimientos registrados.")
 
-        # --- PESTAÑA 3: AJUSTES ---
         if not es_repartidor:
             with tabs_caja[2]:
                 st.write("")
@@ -3303,7 +4073,6 @@ def app_pan_corriente():
                 
                 modo_mantenedor = st.radio("Acción", ["Crear Nueva Entidad", "Gestionar Existente"], horizontal=True, label_visibility="collapsed", key="rad_mant_c")
                 st.write("")
-                
                 df_mant = obtener_todas_entidades()
                 
                 if modo_mantenedor == "Crear Nueva Entidad":
@@ -3324,8 +4093,7 @@ def app_pan_corriente():
                                     conn_ent.commit()
                                     st.cache_data.clear()
                                     st.success("Guardado.")
-                                    time.sleep(0.5)
-                                    st.rerun()
+                                    time.sleep(0.5); st.rerun()
                                 except Exception as e:
                                     st.error("Error al guardar. Posible duplicado.")
                                 finally:
@@ -3335,7 +4103,6 @@ def app_pan_corriente():
                 else:
                     if not df_mant.empty:
                         op_gest = st.selectbox("Seleccione entidad a gestionar", df_mant['nombre'].tolist(), index=None, placeholder="Buscar entidad...", key="sel_gest_c")
-                        
                         if op_gest:
                             row = df_mant[df_mant['nombre'] == op_gest].iloc[0]
                             with st.form("edit_ent_form_c", border=False):
@@ -3393,7 +4160,7 @@ def app_pan_corriente():
             
             if ts:
                 has_date = ts != "clientes_corriente"
-                f_del = c2.date_input("Fecha", date.today()) if has_date else None
+                f_del = c2.date_input("Fecha", date.today(), format="DD/MM/YYYY") if has_date else None
                 
                 conn = get_conn()
                 try:
@@ -3401,8 +4168,20 @@ def app_pan_corriente():
                     df = pd.read_sql(q, conn, params=(f_del,) if has_date else ())
                     
                     if not df.empty:
-                        # TRADUCCIÓN SEMÁNTICA
                         df_visual = df.copy()
+                        
+                        # --- CORRECCIÓN ESPACIO-TEMPORAL (UTC a Santiago) ---
+                        for col in df_visual.columns:
+                            if pd.api.types.is_datetime64_any_dtype(df_visual[col]):
+                                try:
+                                    if df_visual[col].dt.tz is None:
+                                        df_visual[col] = df_visual[col].dt.tz_localize('UTC').dt.tz_convert('America/Santiago')
+                                    else:
+                                        df_visual[col] = df_visual[col].dt.tz_convert('America/Santiago')
+                                    df_visual[col] = df_visual[col].dt.strftime('%d/%m/%Y %H:%M:%S')
+                                except:
+                                    pass
+
                         inv_vend = {v: k for k, v in dict_vend.items()}
                         
                         if 'id_vendedor' in df_visual.columns:
@@ -3412,9 +4191,10 @@ def app_pan_corriente():
                             df_visual['Cliente'] = df_visual['id_cliente'].map(dict(zip(df_cli_temp['id'], df_cli_temp['nombre'])))
 
                         st.dataframe(df_visual, use_container_width=True)
+                    else:
+                        st.info("No hay registros en esta tabla para los parámetros seleccionados.")
                         
                         st.divider()
-                        # ESTRUCTURA DE TRES COLUMNAS (Simetría con Pan Especial)
                         col_id, col_dia, col_purge = st.columns(3)
                         
                         with col_id:
@@ -3461,20 +4241,15 @@ def app_pan_corriente():
                                 if txt_confirm == ts:
                                     try:
                                         with conn.cursor() as c:
-                                            # Comando maestro para resetear el autoincremento
                                             c.execute(f"TRUNCATE TABLE {ts} RESTART IDENTITY CASCADE")
                                         conn.commit()
                                         st.cache_data.clear()
                                         st.success(f"La tabla {ts} ha sido vaciada y sus IDs reiniciados.")
-                                        time.sleep(1.5)
-                                        st.rerun()
+                                        time.sleep(1.5); st.rerun()
                                     except Exception as e:
                                         st.error(f"Error al vaciar la tabla: {e}")
                                 else:
                                     st.warning("Confirmación incorrecta. Escriba el nombre exacto.")
-                                    
-                    else:
-                        st.info("No hay registros en esta tabla para la fecha seleccionada.")
                 except Exception as e: st.error(f"Error en consulta: {e}")
                 finally: conn.close()
             
